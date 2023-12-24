@@ -20,7 +20,7 @@ impl<L: Lock> Drop for Guard<'_, L> {
     }
 }
 
-pub struct TASLock { locked: AtomicBool }
+pub struct TASLock { locked: AtomicBool, }
 
 impl TASLock {
     pub fn new() -> Self {
@@ -37,7 +37,7 @@ impl Lock for TASLock {
     }
 }
 
-pub struct TTASLock { locked: AtomicBool }
+pub struct TTASLock { locked: AtomicBool, }
 
 impl TTASLock {
     pub fn new() -> Self {
@@ -61,7 +61,7 @@ impl Lock for TTASLock {
 pub struct BackoffLock {
     ttas: TTASLock,
     min_delay: Duration,
-    max_delay: Duration
+    max_delay: Duration,
 }
 
 impl BackoffLock {
