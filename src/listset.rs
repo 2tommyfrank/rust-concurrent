@@ -1,4 +1,4 @@
-use crate::hash::Hashable;
+use crate::{hash::Hashable, lock::Lock};
 
 pub trait Set<T> {
     fn contains(&self, element: T) -> bool;
@@ -96,5 +96,28 @@ impl<T: Hashable> MutSet<T> for SeqListSet<T> {
         let (node, present) = Node::find_mut(&mut self.head, element.hash());
         if present { assert!(Node::remove(node).is_ok()); }
         present
+    }
+}
+
+pub struct CoarseListSet<T: Hashable, L: Lock> {
+    seq: SeqListSet<T>,
+    lock: L,
+}
+
+impl<T: Hashable, L: Lock> Set<T> for CoarseListSet<T, L> {
+    fn contains(&self, element: T) -> bool {
+        let _guard = self.lock.acquire();
+        self.seq.contains(element)
+    }
+}
+
+impl<T: Hashable, L: Lock> MutSet<T> for CoarseListSet<T, L> {
+    fn add(&mut self, element: T) -> bool {
+        let _guard = self.lock.acquire();
+        self.seq.add(element)
+    }
+    fn remove(&mut self, element: T) -> bool {
+        let _guard = self.lock.acquire();
+        self.seq.remove(element)
     }
 }
