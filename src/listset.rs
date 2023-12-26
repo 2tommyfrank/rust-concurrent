@@ -11,7 +11,7 @@ pub trait MutSet<T>: Set<T> {
 
 struct Node<T> {
     item: T,
-    next: Link<T>
+    next: Link<T>,
 }
 
 type Link<T> = Option<Box<Node<T>>>;
@@ -69,11 +69,11 @@ impl<T: Hashable> Hashable for Node<T> {
     fn hash(&self) -> u64 { self.item.hash() }
 }
 
-pub struct SeqListSet<T> {
-    head: Link<T>
+pub struct SeqListSet<T: Hashable> {
+    head: Link<T>,
 }
 
-impl<T> SeqListSet<T> {
+impl<T: Hashable> SeqListSet<T> {
     pub fn new() -> Self {
         SeqListSet { head: None }
     }
