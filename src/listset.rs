@@ -1,4 +1,6 @@
-use crate::{hash::Hashable, lock::Lock};
+use std::hash::Hash;
+
+use crate::{lock::Lock, hash::{Hashed, Hashable}};
 
 pub trait Set<T> {
     fn contains(&self, element: T) -> bool;
@@ -9,15 +11,16 @@ pub trait MutSet<T>: Set<T> {
     fn remove(&mut self, element: T) -> bool;
 }
 
-struct Node<T> {
-    item: T,
+struct Node<T: Hash> {
+    item: Hashed<T>,
     next: Link<T>,
 }
 
 type Link<T> = Option<Box<Node<T>>>;
 
-impl<T> Node<T> {
+impl<T: Hash> Node<T> {
     fn insert(at: &mut Link<T>, item: T) {
+        let item = Hashed::new(item);
         let new_node = Node { item, next: at.take() };
         *at = Some(Box::new(new_node));
     }
@@ -25,14 +28,11 @@ impl<T> Node<T> {
         match at.take() {
             Some(node) => {
                 *at = node.next;
-                Ok(node.item)
+                Ok(node.item.get())
             },
             None => Err("cannot remove from empty list"),
         }
     }
-}
-
-impl<T: Hashable> Node<T> {
     fn find(from: &Link<T>, key: u64) -> (&Link<T>, bool) {
         match from {
             Some(node) if node.hash() < key => Self::find(&node.next, key),
@@ -65,53 +65,56 @@ impl<T: Hashable> Node<T> {
     // }
 }
 
-impl<T: Hashable> Hashable for Node<T> {
+impl<T: Hash> Hashable for Node<T> {
     fn hash(&self) -> u64 { self.item.hash() }
 }
 
-pub struct SeqListSet<T: Hashable> {
+pub struct SeqListSet<T: Hash> {
     head: Link<T>,
 }
 
-impl<T: Hashable> SeqListSet<T> {
+impl<T: Hash> SeqListSet<T> {
     pub fn new() -> Self {
         SeqListSet { head: None }
     }
 }
 
-impl<T: Hashable> Set<T> for SeqListSet<T> {
+impl<T: Hash> Set<T> for SeqListSet<T> {
     fn contains(&self, element: T) -> bool {
-        let (_node, present) = Node::find(&self.head, element.hash());
+        let key = Hashable::hash(&element);
+        let (_node, present) = Node::find(&self.head, key);
         present
     }
 }
 
-impl<T: Hashable> MutSet<T> for SeqListSet<T> {
+impl<T: Hash> MutSet<T> for SeqListSet<T> {
     fn add(&mut self, element: T) -> bool {
-        let (node, present) = Node::find_mut(&mut self.head, element.hash());
+        let key = Hashable::hash(&element);
+        let (node, present) = Node::find_mut(&mut self.head, key);
         if !present { Node::insert(node, element); }
         !present
     }
     fn remove(&mut self, element: T) -> bool {
-        let (node, present) = Node::find_mut(&mut self.head, element.hash());
+        let key = Hashable::hash(&element);
+        let (node, present) = Node::find_mut(&mut self.head, key);
         if present { assert!(Node::remove(node).is_ok()); }
         present
     }
 }
 
-pub struct CoarseListSet<T: Hashable, L: Lock> {
+pub struct CoarseListSet<T: Hash, L: Lock> {
     seq: SeqListSet<T>,
     lock: L,
 }
 
-impl<T: Hashable, L: Lock> Set<T> for CoarseListSet<T, L> {
+impl<T: Hash, L: Lock> Set<T> for CoarseListSet<T, L> {
     fn contains(&self, element: T) -> bool {
         let _guard = self.lock.acquire();
         self.seq.contains(element)
     }
 }
 
-impl<T: Hashable, L: Lock> MutSet<T> for CoarseListSet<T, L> {
+impl<T: Hash, L: Lock> MutSet<T> for CoarseListSet<T, L> {
     fn add(&mut self, element: T) -> bool {
         let _guard = self.lock.acquire();
         self.seq.add(element)
