@@ -69,9 +69,7 @@ impl<T: Hash> Hashable for Node<T> {
     fn hash(&self) -> u64 { self.item.hash() }
 }
 
-pub struct SeqListSet<T: Hash> {
-    head: Link<T>,
-}
+pub struct SeqListSet<T: Hash> { head: Link<T> }
 
 impl<T: Hash> SeqListSet<T> {
     pub fn new() -> Self {
