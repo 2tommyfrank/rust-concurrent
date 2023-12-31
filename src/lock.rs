@@ -36,7 +36,7 @@ pub struct TTASLock(TASLock);
 impl TTASLock {
     pub fn new() -> Self { TTASLock(TASLock::new()) }
     fn try_lock(&self) -> bool {
-        while self.0.locked.load(Ordering::Relaxed) {};
+        while self.0.locked.load(Ordering::Acquire) {};
         !self.0.locked.swap(true, Ordering::Acquire)
     }
 }
@@ -86,7 +86,7 @@ pub struct ArrayGuard<'a> {
 }
 
 impl ArrayLock {
-    // ArrayLock is only designed to work with a set finite number of threads
+    // ArrayLock is only designed to work with a bounded number of threads
     pub fn new(max_threads: usize) -> Self {
         let mut flags: Vec<AtomicBool> = Vec::with_capacity(max_threads);
         flags.push(AtomicBool::new(true));
@@ -107,11 +107,11 @@ impl ArrayLock {
 impl Lock for ArrayLock {
     type Guard<'a> = ArrayGuard<'a> where Self: 'a;
     fn acquire(&self) -> Self::Guard<'_> {
-        if self.guards_left.fetch_sub(1, Ordering::Acquire) == 0 {
+        // using AcqRel on RMW operations ensures fairness
+        if self.guards_left.fetch_sub(1, Ordering::AcqRel) == 0 {
             self.guards_left.fetch_add(1, Ordering::Release);
             panic!("too many threads trying to acquire ArrayLock");
         }
-        // AcqRel on fetch_add ensures fairness
         let slot = self.next_slot.fetch_add(1, Ordering::AcqRel);
         while !self.get_flag(slot).load(Ordering::Acquire) {};
         ArrayGuard { lock: self, slot }
