@@ -1,5 +1,3 @@
-#![feature(cell_update)]
-
 pub mod listset;
 pub mod lock;
 

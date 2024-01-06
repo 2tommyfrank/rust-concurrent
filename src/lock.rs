@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering, AtomicUsize};
+use std::sync::atomic::{AtomicBool, Ordering, AtomicUsize, AtomicPtr};
 use std::time::Duration;
 
 use crate::backoff::Backoff;
@@ -18,7 +18,7 @@ impl TASLock {
 }
 
 impl Lock for TASLock {
-    type Guard<'a> = TASGuard<'a> where Self: 'a;
+    type Guard<'a> = TASGuard<'a>;
     fn acquire(&self) -> Self::Guard<'_> {
         while self.locked.swap(true, Ordering::Acquire) {};
         TASGuard { lock: &self }
@@ -42,7 +42,7 @@ impl TTASLock {
 }
 
 impl Lock for TTASLock {
-    type Guard<'a> = TASGuard<'a> where Self: 'a;
+    type Guard<'a> = TASGuard<'a>;
     fn acquire(&self) -> Self::Guard<'_> {
         while !self.try_lock() {};
         TASGuard { lock: &self.0 }
@@ -66,7 +66,7 @@ impl BackoffLock {
 }
 
 impl Lock for BackoffLock {
-    type Guard<'a> = TASGuard<'a> where Self: 'a;
+    type Guard<'a> = TASGuard<'a>;
     fn acquire(&self) -> Self::Guard<'_> {
         let mut backoff = Backoff::new(self.min_delay, self.max_delay);
         while !self.ttas.try_lock() { backoff.backoff(); }
@@ -105,7 +105,7 @@ impl ArrayLock {
 }
 
 impl Lock for ArrayLock {
-    type Guard<'a> = ArrayGuard<'a> where Self: 'a;
+    type Guard<'a> = ArrayGuard<'a>;
     fn acquire(&self) -> Self::Guard<'_> {
         // using AcqRel on RMW operations ensures fairness
         if self.guards_left.fetch_sub(1, Ordering::AcqRel) == 0 {
@@ -124,5 +124,49 @@ impl Drop for ArrayGuard<'_> {
         // now self.slot is safe to be used by another thread
         self.lock.guards_left.fetch_add(1, Ordering::Release);
         self.lock.get_flag(self.slot + 1).store(true, Ordering::Release);
+    }
+}
+
+pub struct CLHLock {
+    tail: AtomicPtr<AtomicBool>,
+}
+
+pub struct CLHGuard<'a> {
+    lock: &'a CLHLock,
+    node: *mut AtomicBool,
+}
+
+impl CLHLock {
+    pub fn new() -> Self {
+        let locked = AtomicBool::new(false);
+        let tail = Box::into_raw(Box::new(locked));
+        CLHLock { tail: AtomicPtr::new(tail) }
+    }
+}
+
+impl Drop for CLHLock {
+    fn drop(&mut self) {
+        let tail: *mut AtomicBool = *self.tail.get_mut();
+        unsafe { drop(Box::from_raw(tail)); }
+    }
+}
+
+impl Lock for CLHLock {
+    type Guard<'a> = CLHGuard<'a>;
+    fn acquire(&self) -> Self::Guard<'_> {
+        let locked = AtomicBool::new(true);
+        let node = Box::into_raw(Box::new(locked));
+        let prev = self.tail.swap(node, Ordering::SeqCst);
+        let prev_locked = unsafe {
+            prev.as_ref().expect("CLHLock in invalid state")
+        };
+        while prev_locked.load(Ordering::Acquire) {}
+        CLHGuard { lock: &self, node }
+    }
+}
+
+impl Drop for CLHGuard<'_> {
+    fn drop(&mut self) {
+        todo!()
     }
 }
