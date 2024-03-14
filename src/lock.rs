@@ -12,9 +12,9 @@ pub trait Lock: Sized {
 }
 
 pub trait LockRef<'a>: Send {
-    // the drop method should release the lock
-    type Guard<'b>: Drop where Self: 'b;
-    fn acquire(&mut self) -> Self::Guard<'_>;
+    // the guard's drop method should release the lock
+    type Guard: Drop;
+    fn acquire(&mut self) -> Self::Guard;
 }
 
 pub struct TasLock { locked: AtomicBool }
@@ -32,11 +32,11 @@ impl Lock for TasLock {
     fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         Ok(TasLockRef(self))
     }
-} 
+}
 
 impl<'a> LockRef<'a> for TasLockRef<'a> {
-    type Guard<'b> = TasGuard<'b> where Self: 'b;
-    fn acquire(&mut self) -> Self::Guard<'_> {
+    type Guard = TasGuard<'a>;
+    fn acquire(&mut self) -> Self::Guard {
         let locked = &self.0.locked;
         while locked.swap(true, Ordering::Acquire) {};
         TasGuard { locked }
@@ -70,8 +70,8 @@ impl Lock for TtasLock {
 }
 
 impl<'a> LockRef<'a> for TtasLockRef<'a> {
-    type Guard<'b> = TasGuard<'b> where Self: 'b;
-    fn acquire(&mut self) -> Self::Guard<'_> {
+    type Guard = TasGuard<'a>;
+    fn acquire(&mut self) -> Self::Guard {
         let lock = self.0;
         while !lock.try_lock() {};
         TasGuard { locked: &lock.locked }
@@ -103,8 +103,8 @@ impl Lock for BackoffLock {
 }
 
 impl<'a> LockRef<'a> for BackoffLockRef<'a> {
-    type Guard<'b> = TasGuard<'b> where Self: 'b;
-    fn acquire(&mut self) -> Self::Guard<'_> {
+    type Guard = TasGuard<'a>;
+    fn acquire(&mut self) -> Self::Guard {
         let BackoffLock { ttas, min_delay, max_delay } = self.0;
         let mut backoff = Backoff::new(*min_delay, *max_delay);
         while !ttas.try_lock() { backoff.backoff(); }
@@ -155,8 +155,8 @@ impl Lock for ArrayLock {
 }
 
 impl<'a> LockRef<'a> for ArrayLockRef<'a> {
-    type Guard<'b> = ArrayGuard<'b> where Self: 'b;
-    fn acquire(&mut self) -> Self::Guard<'_> {
+    type Guard = ArrayGuard<'a>;
+    fn acquire(&mut self) -> Self::Guard {
         let lock = self.0;
         // using AcqRel ensures fairness
         let slot = lock.next_slot.fetch_add(1, Ordering::AcqRel);
@@ -215,8 +215,8 @@ impl Lock for CLHLock {
 }
 
 impl<'a> LockRef<'a> for CLHLockRef<'a> {
-    type Guard<'b> = CLHGuard<'b> where Self: 'b;
-    fn acquire(&mut self) -> Self::Guard<'_> {
+    type Guard = CLHGuard<'a>;
+    fn acquire(&mut self) -> Self::Guard {
         let tail = &self.lock.tail;
         *self.curr_node.get_mut() = true;
         let curr_node = Arc::into_raw(self.curr_node).cast_mut();
