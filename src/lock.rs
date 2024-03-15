@@ -46,7 +46,7 @@ impl Lock for PetersonLock {
             self.refs_left -= 1;
             Ok(PetersonLockRef {
                 lock: self,
-                id: self.refs_left == 0,
+                id: self.refs_left != 0,
             })
         } else { Err("thread capacity exceeded") }
     }
@@ -77,8 +77,7 @@ impl<'a> LockRef<'a> for PetersonLockRef<'a> {
         my_flag.store(true, Ordering::Release);
         victim.store(self.id, Ordering::Release);
         while other_flag.load(Ordering::Acquire) &&
-            victim.load(Ordering::Acquire) == self.id
-        {}
+            victim.load(Ordering::Acquire) == self.id {}
         PetersonGuard { flag: my_flag }
     }
 }
@@ -86,6 +85,71 @@ impl<'a> LockRef<'a> for PetersonLockRef<'a> {
 impl Drop for PetersonGuard<'_> {
     fn drop(&mut self) {
         self.flag.store(false, Ordering::Release);
+    }
+}
+
+
+pub struct FilterLock {
+    levels: Box<[AtomicUsize]>,
+    victims: Box<[AtomicUsize]>,
+    refs_left: usize,
+}
+pub struct FilterLockRef<'a> {
+    lock: &'a FilterLock,
+    id: usize,
+}
+pub struct FilterGuard<'a> { level: &'a AtomicUsize }
+
+impl Lock for FilterLock {
+    type Ref<'a> = FilterLockRef<'a>;
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+        if self.refs_left > 0 {
+            self.refs_left -= 1;
+            Ok(FilterLockRef { lock: self, id: self.refs_left })
+        } else { Err("thread capacity exceeded") }
+    }
+}
+
+impl BoundedLock for FilterLock {
+    fn with_capacity(max_threads: usize) -> Result<Self, Str> {
+        let mut levels: Vec<AtomicUsize> = Vec::with_capacity(max_threads);
+        let mut victims: Vec<AtomicUsize> = Vec::with_capacity(max_threads);
+        for _ in 0..max_threads {
+            levels.push(AtomicUsize::new(0));
+            victims.push(AtomicUsize::new(0));
+        }
+        Ok(FilterLock {
+            levels: levels.into_boxed_slice(),
+            victims: victims.into_boxed_slice(),
+            refs_left: max_threads,
+        })
+    }
+    fn capacity(&self) -> usize { self.levels.len() }
+    fn refs_left(&self) -> usize { self.refs_left }
+}
+
+impl<'a> LockRef<'a> for FilterLockRef<'a> {
+    type Guard = FilterGuard<'a>;
+    fn acquire(&mut self) -> Self::Guard {
+        let FilterLock { levels, victims, refs_left: _ } = self.lock;
+        let capacity = self.lock.capacity();
+        for i in 1..capacity {
+            levels[self.id].store(i, Ordering::Release);
+            victims[i].store(self.id, Ordering::Release);
+            // spin until no other threads are ahead
+            while (0..capacity).any(|k| {
+                k != self.id
+                && levels[k].load(Ordering::Acquire) >= i
+                && victims[i].load(Ordering::Acquire) == self.id
+            }) {}
+        }
+        FilterGuard { level: &levels[self.id] }
+    }
+}
+
+impl Drop for FilterGuard<'_> {
+    fn drop(&mut self) {
+        self.level.store(0, Ordering::Release);
     }
 }
 
