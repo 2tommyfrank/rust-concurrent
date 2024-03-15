@@ -6,9 +6,14 @@ use std::time::Duration;
 use crate::Str;
 use crate::backoff::Backoff;
 
-pub trait Lock: Sized {
+pub trait BoundedLock: Sized {
     type Ref<'a>: LockRef<'a> where Self: 'a;
+    fn with_capacity(max_threads: usize) -> Self;
     fn borrow(&self) -> Result<Self::Ref<'_>, Str>;
+}
+
+pub trait Lock: BoundedLock {
+    fn new() -> Self;
 }
 
 pub trait LockRef<'a>: Send {
@@ -21,16 +26,17 @@ pub struct TasLock { locked: AtomicBool }
 pub struct TasLockRef<'a>(&'a TasLock);
 pub struct TasGuard<'a> { locked: &'a AtomicBool }
 
-impl TasLock {
-    pub fn new() -> Self {
-        TasLock { locked: AtomicBool::new(false) }
-    }
-}
-
-impl Lock for TasLock {
+impl BoundedLock for TasLock {
     type Ref<'a> = TasLockRef<'a>;
     fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         Ok(TasLockRef(self))
+    }
+    fn with_capacity(max_threads: usize) -> Self { Self::new() }
+}
+
+impl Lock for TasLock {
+    fn new() -> Self {
+        TasLock { locked: AtomicBool::new(false) }
     }
 }
 
@@ -53,19 +59,23 @@ pub struct TtasLock { locked: AtomicBool }
 pub struct TtasLockRef<'a>(&'a TtasLock);
 
 impl TtasLock {
-    pub fn new() -> Self {
-        TtasLock { locked: AtomicBool::new(false) }
-    }
     fn try_lock(&self) -> bool {
         while self.locked.load(Ordering::Acquire) {};
         !self.locked.swap(true, Ordering::Acquire)
     }
 }
 
-impl Lock for TtasLock {
+impl BoundedLock for TtasLock {
     type Ref<'a> = TtasLockRef<'a>;
     fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         Ok(TtasLockRef(self))
+    }
+    fn with_capacity(max_threads: usize) -> Self { Self::new() }
+}
+
+impl Lock for TtasLock {
+    fn new() -> Self {
+        TtasLock { locked: AtomicBool::new(false) }
     }
 }
 
@@ -85,20 +95,21 @@ pub struct BackoffLock {
 }
 pub struct BackoffLockRef<'a>(&'a BackoffLock);
 
-impl BackoffLock {
-    pub fn new() -> Self {
+impl BoundedLock for BackoffLock {
+    type Ref<'a> = BackoffLockRef<'a>;
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+        Ok(BackoffLockRef(self))
+    }
+    fn with_capacity(max_threads: usize) -> Self { Self::new() }
+}
+
+impl Lock for BackoffLock {
+    fn new() -> Self {
         BackoffLock {
             ttas: TtasLock::new(),
             min_delay: Duration::from_millis(1),
             max_delay: Duration::from_millis(1000),
         }
-    }
-}
-
-impl Lock for BackoffLock {
-    type Ref<'a> = BackoffLockRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
-        Ok(BackoffLockRef(self))
     }
 }
 
@@ -125,8 +136,17 @@ pub struct ArrayGuard<'a> {
 }
 
 impl ArrayLock {
-    // ArrayLock is only designed to work with a bounded number of threads
-    pub fn new(max_threads: usize) -> Self {
+    pub fn capacity(&self) -> usize { self.flags.len() }
+    pub fn refs_left(&self) -> usize { self.refs_left.get() }
+    fn get_flag(&self, slot: usize) -> &AtomicBool {
+        // index is always in bounds because of the modulo
+        unsafe { &self.flags.get_unchecked(slot % self.capacity()) }
+    }
+}
+
+impl BoundedLock for ArrayLock {
+    type Ref<'a> = ArrayLockRef<'a>;
+    fn with_capacity(max_threads: usize) -> Self {
         let mut flags: Vec<AtomicBool> = Vec::with_capacity(max_threads);
         flags.push(AtomicBool::new(true));
         for _ in 1..max_threads { flags.push(AtomicBool::new(false)); }
@@ -136,16 +156,6 @@ impl ArrayLock {
             refs_left: Cell::new(max_threads),
         }
     }
-    pub fn capacity(&self) -> usize { self.flags.len() }
-    pub fn refs_left(&self) -> usize { self.refs_left.get() }
-    fn get_flag(&self, slot: usize) -> &AtomicBool {
-        // index is always in bounds because of the modulo
-        unsafe { &self.flags.get_unchecked(slot % self.capacity()) }
-    }
-}
-
-impl Lock for ArrayLock {
-    type Ref<'a> = ArrayLockRef<'a>;
     fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         if self.refs_left.get() > 0 {
             self.refs_left.update(|x| x - 1);
@@ -167,6 +177,7 @@ impl<'a> LockRef<'a> for ArrayLockRef<'a> {
     }
 }
 
+// ArrayLockRef does not use the thread-unsafe field ArrayLock.refs_left
 unsafe impl Send for ArrayLockRef<'_> {}
 
 impl Drop for ArrayGuard<'_> {
@@ -188,14 +199,6 @@ pub struct CLHGuard<'a> {
     lock_ref: &'a CLHLockRef<'a>,
 }
 
-impl CLHLock {
-    pub fn new() -> Self {
-        let locked = AtomicBool::new(false);
-        let tail = Arc::into_raw(Arc::new(locked)).cast_mut();
-        CLHLock { tail: AtomicPtr::new(tail) }
-    }
-}
-
 impl Drop for CLHLock {
     fn drop(&mut self) {
         let tail: *const AtomicBool = *self.tail.get_mut();
@@ -203,7 +206,7 @@ impl Drop for CLHLock {
     }
 }
 
-impl Lock for CLHLock {
+impl BoundedLock for CLHLock {
     type Ref<'a> = CLHLockRef<'a>;
     fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         Ok(CLHLockRef {
@@ -211,6 +214,15 @@ impl Lock for CLHLock {
             curr_node: Arc::new(AtomicBool::new(false)),
             prev_node: None,
         })
+    }
+    fn with_capacity(max_threads: usize) -> Self { Self::new() }
+}
+
+impl Lock for CLHLock {
+    fn new() -> Self {
+        let locked = AtomicBool::new(false);
+        let tail = Arc::into_raw(Arc::new(locked)).cast_mut();
+        CLHLock { tail: AtomicPtr::new(tail) }
     }
 }
 
