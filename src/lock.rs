@@ -37,7 +37,7 @@ pub struct PetersonLockRef<'a> {
     lock: &'a PetersonLock,
     id: bool,
 }
-pub struct PetersonGuard<'a> { flag: &'a AtomicBool }
+pub struct FlagGuard<'a> { flag: &'a AtomicBool }
 
 impl Lock for PetersonLock {
     type Ref<'a> = PetersonLockRef<'a>;
@@ -69,7 +69,7 @@ impl BoundedLock for PetersonLock {
 }
 
 impl<'a> LockRef<'a> for PetersonLockRef<'a> {
-    type Guard = PetersonGuard<'a>;
+    type Guard = FlagGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         let PetersonLock { flags, victim, refs_left: _ } = self.lock;
         let my_flag = if self.id { &flags[1] } else { &flags[0] };
@@ -78,11 +78,11 @@ impl<'a> LockRef<'a> for PetersonLockRef<'a> {
         victim.store(self.id, Ordering::Release);
         while other_flag.load(Ordering::Acquire) &&
             victim.load(Ordering::Acquire) == self.id {}
-        PetersonGuard { flag: my_flag }
+        FlagGuard { flag: my_flag }
     }
 }
 
-impl Drop for PetersonGuard<'_> {
+impl Drop for FlagGuard<'_> {
     fn drop(&mut self) {
         self.flag.store(false, Ordering::Release);
     }
@@ -98,7 +98,7 @@ pub struct FilterLockRef<'a> {
     lock: &'a FilterLock,
     id: usize,
 }
-pub struct FilterGuard<'a> { level: &'a AtomicUsize }
+pub struct LevelGuard<'a> { level: &'a AtomicUsize }
 
 impl Lock for FilterLock {
     type Ref<'a> = FilterLockRef<'a>;
@@ -129,7 +129,7 @@ impl BoundedLock for FilterLock {
 }
 
 impl<'a> LockRef<'a> for FilterLockRef<'a> {
-    type Guard = FilterGuard<'a>;
+    type Guard = LevelGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         let FilterLock { levels, victims, refs_left: _ } = self.lock;
         let capacity = self.lock.capacity();
@@ -138,18 +138,82 @@ impl<'a> LockRef<'a> for FilterLockRef<'a> {
             victims[i].store(self.id, Ordering::Release);
             // spin until no other threads are ahead
             while (0..capacity).any(|k| {
-                k != self.id
-                && levels[k].load(Ordering::Acquire) >= i
-                && victims[i].load(Ordering::Acquire) == self.id
+                if k == self.id { return false }
+                if levels[k].load(Ordering::Acquire) < i { return false }
+                victims[i].load(Ordering::Acquire) == self.id
             }) {}
         }
-        FilterGuard { level: &levels[self.id] }
+        LevelGuard { level: &levels[self.id] }
     }
 }
 
-impl Drop for FilterGuard<'_> {
+impl Drop for LevelGuard<'_> {
     fn drop(&mut self) {
         self.level.store(0, Ordering::Release);
+    }
+}
+
+
+pub struct BakeryLock {
+    flags: Box<[AtomicBool]>,
+    labels: Box<[AtomicUsize]>,
+    refs_left: usize,
+}
+pub struct BakeryLockRef<'a> {
+    lock: &'a BakeryLock,
+    id: usize,
+}
+
+impl Lock for BakeryLock {
+    type Ref<'a> = BakeryLockRef<'a>;
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+        if self.refs_left > 0 {
+            self.refs_left -= 1;
+            Ok(BakeryLockRef { lock: self, id: self.refs_left })
+        } else { Err("thread capacity exceeded") }
+    }
+}
+
+impl BoundedLock for BakeryLock {
+    fn with_capacity(max_threads: usize) -> Result<Self, Str> {
+        let mut flags: Vec<AtomicBool> = Vec::with_capacity(max_threads);
+        let mut labels: Vec<AtomicUsize> = Vec::with_capacity(max_threads);
+        for _ in 0..max_threads {
+            flags.push(AtomicBool::new(false));
+            labels.push(AtomicUsize::new(0));
+        }
+        Ok(BakeryLock {
+            flags: flags.into_boxed_slice(),
+            labels: labels.into_boxed_slice(),
+            refs_left: max_threads,
+        })
+    }
+    fn capacity(&self) -> usize { self.flags.len() }
+    fn refs_left(&self) -> usize { self.refs_left }
+}
+
+impl<'a> LockRef<'a> for BakeryLockRef<'a> {
+    type Guard = FlagGuard<'a>;
+    fn acquire(&mut self) -> Self::Guard {
+        let BakeryLock { flags, labels, refs_left: _ } = self.lock;
+        let capacity = self.lock.capacity();
+        flags[self.id].store(true, Ordering::Release);
+        let mut max_label: usize = 0;
+        for &label in labels.as_ref() {
+            let label = label.load(Ordering::Acquire);
+            if label > max_label { max_label = label; }
+        }
+        let my_label: usize = max_label + 1;
+        labels[self.id].store(my_label, Ordering::Release);
+        while (0..capacity).any(|k| {
+            if k == self.id { return false }
+            if !flags[k].load(Ordering::Acquire) { return false }
+            let other_label = labels[k].load(Ordering::Acquire);
+            if other_label < my_label { return true }
+            if other_label > my_label { return false }
+            k < self.id
+        }) {}
+        FlagGuard { flag: &flags[self.id] }
     }
 }
 
