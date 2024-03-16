@@ -1,6 +1,6 @@
 use std::cell::Cell;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::Str;
@@ -31,7 +31,7 @@ pub trait LockRef<'a>: Send {
 pub struct PetersonLock {
     flags: [AtomicBool; 2],
     victim: AtomicBool,
-    refs_left: u8,
+    refs_left: Cell<u8>,
 }
 pub struct PetersonLockRef<'a> {
     lock: &'a PetersonLock,
@@ -42,11 +42,11 @@ pub struct FlagGuard<'a> { flag: &'a AtomicBool }
 impl Lock for PetersonLock {
     type Ref<'a> = PetersonLockRef<'a>;
     fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
-        if self.refs_left > 0 {
-            self.refs_left -= 1;
+        if self.refs_left.get() > 0 {
+            self.refs_left.update(|x| x - 1);
             Ok(PetersonLockRef {
                 lock: self,
-                id: self.refs_left != 0,
+                id: self.refs_left.get() != 0,
             })
         } else { Err("thread capacity exceeded") }
     }
@@ -60,12 +60,12 @@ impl BoundedLock for PetersonLock {
             Ok(PetersonLock {
                 flags: [AtomicBool::new(false), AtomicBool::new(false)],
                 victim: AtomicBool::new(false),
-                refs_left: 2,
+                refs_left: Cell::new(2),
             })
         }
     }
     fn capacity(&self) -> usize { 2 }
-    fn refs_left(&self) -> usize { self.refs_left as usize }
+    fn refs_left(&self) -> usize { self.refs_left.get() as usize }
 }
 
 impl<'a> LockRef<'a> for PetersonLockRef<'a> {
@@ -82,6 +82,8 @@ impl<'a> LockRef<'a> for PetersonLockRef<'a> {
     }
 }
 
+unsafe impl Send for PetersonLockRef<'_> {}
+
 impl Drop for FlagGuard<'_> {
     fn drop(&mut self) {
         self.flag.store(false, Ordering::Release);
@@ -92,7 +94,7 @@ impl Drop for FlagGuard<'_> {
 pub struct FilterLock {
     levels: Box<[AtomicUsize]>,
     victims: Box<[AtomicUsize]>,
-    refs_left: usize,
+    refs_left: Cell<usize>,
 }
 pub struct FilterLockRef<'a> {
     lock: &'a FilterLock,
@@ -103,9 +105,9 @@ pub struct LevelGuard<'a> { level: &'a AtomicUsize }
 impl Lock for FilterLock {
     type Ref<'a> = FilterLockRef<'a>;
     fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
-        if self.refs_left > 0 {
-            self.refs_left -= 1;
-            Ok(FilterLockRef { lock: self, id: self.refs_left })
+        if self.refs_left.get() > 0 {
+            self.refs_left.update(|x| x - 1);
+            Ok(FilterLockRef { lock: self, id: self.refs_left.get() })
         } else { Err("thread capacity exceeded") }
     }
 }
@@ -121,12 +123,14 @@ impl BoundedLock for FilterLock {
         Ok(FilterLock {
             levels: levels.into_boxed_slice(),
             victims: victims.into_boxed_slice(),
-            refs_left: max_threads,
+            refs_left: Cell::new(max_threads),
         })
     }
     fn capacity(&self) -> usize { self.levels.len() }
-    fn refs_left(&self) -> usize { self.refs_left }
+    fn refs_left(&self) -> usize { self.refs_left.get() }
 }
+
+unsafe impl Send for FilterLockRef<'_> {}
 
 impl<'a> LockRef<'a> for FilterLockRef<'a> {
     type Guard = LevelGuard<'a>;
@@ -157,7 +161,7 @@ impl Drop for LevelGuard<'_> {
 pub struct BakeryLock {
     flags: Box<[AtomicBool]>,
     labels: Box<[AtomicUsize]>,
-    refs_left: usize,
+    refs_left: Cell<usize>,
 }
 pub struct BakeryLockRef<'a> {
     lock: &'a BakeryLock,
@@ -167,9 +171,9 @@ pub struct BakeryLockRef<'a> {
 impl Lock for BakeryLock {
     type Ref<'a> = BakeryLockRef<'a>;
     fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
-        if self.refs_left > 0 {
-            self.refs_left -= 1;
-            Ok(BakeryLockRef { lock: self, id: self.refs_left })
+        if self.refs_left.get() > 0 {
+            self.refs_left.update(|x| x - 1);
+            Ok(BakeryLockRef { lock: self, id: self.refs_left.get() })
         } else { Err("thread capacity exceeded") }
     }
 }
@@ -185,11 +189,11 @@ impl BoundedLock for BakeryLock {
         Ok(BakeryLock {
             flags: flags.into_boxed_slice(),
             labels: labels.into_boxed_slice(),
-            refs_left: max_threads,
+            refs_left: Cell::new(max_threads),
         })
     }
     fn capacity(&self) -> usize { self.flags.len() }
-    fn refs_left(&self) -> usize { self.refs_left }
+    fn refs_left(&self) -> usize { self.refs_left.get() }
 }
 
 impl<'a> LockRef<'a> for BakeryLockRef<'a> {
@@ -199,7 +203,7 @@ impl<'a> LockRef<'a> for BakeryLockRef<'a> {
         let capacity = self.lock.capacity();
         flags[self.id].store(true, Ordering::Release);
         let mut max_label: usize = 0;
-        for &label in labels.as_ref() {
+        for label in labels.as_ref() {
             let label = label.load(Ordering::Acquire);
             if label > max_label { max_label = label; }
         }
@@ -216,6 +220,8 @@ impl<'a> LockRef<'a> for BakeryLockRef<'a> {
         FlagGuard { flag: &flags[self.id] }
     }
 }
+
+unsafe impl Send for BakeryLockRef<'_> {}
 
 
 pub struct TasLock { locked: AtomicBool }

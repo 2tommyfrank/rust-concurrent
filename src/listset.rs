@@ -99,26 +99,3 @@ impl<T: Hash> MutSet<T> for SeqListSet<T> {
         present
     }
 }
-
-pub struct CoarseListSet<T: Hash, L: Lock> {
-    seq: SeqListSet<T>,
-    lock: L,
-}
-
-impl<T: Hash, L: Lock> Set<T> for CoarseListSet<T, L> {
-    fn contains(&self, element: T) -> bool {
-        let _guard = self.lock.acquire();
-        self.seq.contains(element)
-    }
-}
-
-impl<T: Hash, L: Lock> MutSet<T> for CoarseListSet<T, L> {
-    fn add(&mut self, element: T) -> bool {
-        let _guard = self.lock.acquire();
-        self.seq.add(element)
-    }
-    fn remove(&mut self, element: T) -> bool {
-        let _guard = self.lock.acquire();
-        self.seq.remove(element)
-    }
-}
