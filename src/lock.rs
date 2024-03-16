@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +7,7 @@ use crate::backoff::Backoff;
 
 pub trait Lock: Sized {
     type Ref<'a>: LockRef<'a> where Self: 'a;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str>;
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str>;
 }
 
 pub trait BoundedLock: Lock {
@@ -31,7 +30,7 @@ pub trait LockRef<'a>: Send {
 pub struct PetersonLock {
     flags: [AtomicBool; 2],
     victim: AtomicBool,
-    refs_left: Cell<u8>,
+    refs_left: u8,
 }
 pub struct PetersonLockRef<'a> {
     lock: &'a PetersonLock,
@@ -41,12 +40,12 @@ pub struct FlagGuard<'a> { flag: &'a AtomicBool }
 
 impl Lock for PetersonLock {
     type Ref<'a> = PetersonLockRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
-        if self.refs_left.get() > 0 {
-            self.refs_left.update(|x| x - 1);
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+        if self.refs_left > 0 {
+            self.refs_left -= 1;
             Ok(PetersonLockRef {
                 lock: self,
-                id: self.refs_left.get() != 0,
+                id: self.refs_left != 0,
             })
         } else { Err("thread capacity exceeded") }
     }
@@ -60,12 +59,12 @@ impl BoundedLock for PetersonLock {
             Ok(PetersonLock {
                 flags: [AtomicBool::new(false), AtomicBool::new(false)],
                 victim: AtomicBool::new(false),
-                refs_left: Cell::new(2),
+                refs_left: 2,
             })
         }
     }
     fn capacity(&self) -> usize { 2 }
-    fn refs_left(&self) -> usize { self.refs_left.get() as usize }
+    fn refs_left(&self) -> usize { self.refs_left as usize }
 }
 
 impl<'a> LockRef<'a> for PetersonLockRef<'a> {
@@ -82,8 +81,6 @@ impl<'a> LockRef<'a> for PetersonLockRef<'a> {
     }
 }
 
-unsafe impl Send for PetersonLockRef<'_> {}
-
 impl Drop for FlagGuard<'_> {
     fn drop(&mut self) {
         self.flag.store(false, Ordering::Release);
@@ -94,7 +91,7 @@ impl Drop for FlagGuard<'_> {
 pub struct FilterLock {
     levels: Box<[AtomicUsize]>,
     victims: Box<[AtomicUsize]>,
-    refs_left: Cell<usize>,
+    refs_left: usize,
 }
 pub struct FilterLockRef<'a> {
     lock: &'a FilterLock,
@@ -104,10 +101,10 @@ pub struct LevelGuard<'a> { level: &'a AtomicUsize }
 
 impl Lock for FilterLock {
     type Ref<'a> = FilterLockRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
-        if self.refs_left.get() > 0 {
-            self.refs_left.update(|x| x - 1);
-            Ok(FilterLockRef { lock: self, id: self.refs_left.get() })
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+        if self.refs_left > 0 {
+            self.refs_left -= 1;
+            Ok(FilterLockRef { lock: self, id: self.refs_left })
         } else { Err("thread capacity exceeded") }
     }
 }
@@ -123,14 +120,12 @@ impl BoundedLock for FilterLock {
         Ok(FilterLock {
             levels: levels.into_boxed_slice(),
             victims: victims.into_boxed_slice(),
-            refs_left: Cell::new(max_threads),
+            refs_left: max_threads,
         })
     }
     fn capacity(&self) -> usize { self.levels.len() }
-    fn refs_left(&self) -> usize { self.refs_left.get() }
+    fn refs_left(&self) -> usize { self.refs_left }
 }
-
-unsafe impl Send for FilterLockRef<'_> {}
 
 impl<'a> LockRef<'a> for FilterLockRef<'a> {
     type Guard = LevelGuard<'a>;
@@ -161,7 +156,7 @@ impl Drop for LevelGuard<'_> {
 pub struct BakeryLock {
     flags: Box<[AtomicBool]>,
     labels: Box<[AtomicUsize]>,
-    refs_left: Cell<usize>,
+    refs_left: usize,
 }
 pub struct BakeryLockRef<'a> {
     lock: &'a BakeryLock,
@@ -170,10 +165,10 @@ pub struct BakeryLockRef<'a> {
 
 impl Lock for BakeryLock {
     type Ref<'a> = BakeryLockRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
-        if self.refs_left.get() > 0 {
-            self.refs_left.update(|x| x - 1);
-            Ok(BakeryLockRef { lock: self, id: self.refs_left.get() })
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+        if self.refs_left > 0 {
+            self.refs_left -= 1;
+            Ok(BakeryLockRef { lock: self, id: self.refs_left })
         } else { Err("thread capacity exceeded") }
     }
 }
@@ -189,11 +184,11 @@ impl BoundedLock for BakeryLock {
         Ok(BakeryLock {
             flags: flags.into_boxed_slice(),
             labels: labels.into_boxed_slice(),
-            refs_left: Cell::new(max_threads),
+            refs_left: max_threads,
         })
     }
     fn capacity(&self) -> usize { self.flags.len() }
-    fn refs_left(&self) -> usize { self.refs_left.get() }
+    fn refs_left(&self) -> usize { self.refs_left }
 }
 
 impl<'a> LockRef<'a> for BakeryLockRef<'a> {
@@ -221,8 +216,6 @@ impl<'a> LockRef<'a> for BakeryLockRef<'a> {
     }
 }
 
-unsafe impl Send for BakeryLockRef<'_> {}
-
 
 pub struct TasLock { locked: AtomicBool }
 pub struct TasLockRef<'a>(&'a TasLock);
@@ -230,7 +223,7 @@ pub struct TasGuard<'a> { locked: &'a AtomicBool }
 
 impl Lock for TasLock {
     type Ref<'a> = TasLockRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         Ok(TasLockRef(self))
     }
 }
@@ -269,7 +262,7 @@ impl TtasLock {
 
 impl Lock for TtasLock {
     type Ref<'a> = TtasLockRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         Ok(TtasLockRef(self))
     }
 }
@@ -299,7 +292,7 @@ pub struct BackoffLockRef<'a>(&'a BackoffLock);
 
 impl Lock for BackoffLock {
     type Ref<'a> = BackoffLockRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         Ok(BackoffLockRef(self))
     }
 }
@@ -328,8 +321,7 @@ impl<'a> LockRef<'a> for BackoffLockRef<'a> {
 pub struct ArrayLock {
     flags: Box<[AtomicBool]>,
     next_slot: AtomicUsize,
-    // unsynchronized; should not be used by ArrayLockRef or ArrayGuard
-    refs_left: Cell<usize>,
+    refs_left: usize,
 }
 pub struct ArrayLockRef<'a>(&'a ArrayLock);
 pub struct ArrayGuard<'a> {
@@ -346,9 +338,9 @@ impl ArrayLock {
 
 impl Lock for ArrayLock {
     type Ref<'a> = ArrayLockRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
-        if self.refs_left.get() > 0 {
-            self.refs_left.update(|x| x - 1);
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+        if self.refs_left > 0 {
+            self.refs_left -= 1;
             Ok(ArrayLockRef(self))
         } else { Err("thread capacity exceeded") }
     }
@@ -362,11 +354,11 @@ impl BoundedLock for ArrayLock {
         Ok(ArrayLock {
             flags: flags.into_boxed_slice(),
             next_slot: AtomicUsize::new(0),
-            refs_left: Cell::new(max_threads),
+            refs_left: max_threads,
         })
     }
     fn capacity(&self) -> usize { self.flags.len() }
-    fn refs_left(&self) -> usize { self.refs_left.get() }
+    fn refs_left(&self) -> usize { self.refs_left }
 }
 
 impl<'a> LockRef<'a> for ArrayLockRef<'a> {
@@ -381,9 +373,6 @@ impl<'a> LockRef<'a> for ArrayLockRef<'a> {
         ArrayGuard { curr_flag, next_flag }
     }
 }
-
-// ArrayLockRef does not use the thread-unsafe field ArrayLock.refs_left
-unsafe impl Send for ArrayLockRef<'_> {}
 
 impl Drop for ArrayGuard<'_> {
     fn drop(&mut self) {
@@ -414,7 +403,7 @@ impl Drop for CLHLock {
 
 impl Lock for CLHLock {
     type Ref<'a> = CLHLockRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         Ok(CLHLockRef {
             lock: self,
             curr_node: Arc::new(AtomicBool::new(false)),
