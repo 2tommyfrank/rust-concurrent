@@ -1,47 +1,29 @@
 use std::{ptr::NonNull, sync::atomic::{AtomicBool, Ordering}};
 
-use crate::atomic::Raw;
-
-pub struct Notify { flag: NonNull<AtomicBool> }
-pub struct Wait { flag: Box<AtomicBool> }
+pub struct Wait(AtomicBool);
+pub struct Notify(NonNull<AtomicBool>);
 
 impl Wait {
-    pub fn new() -> (Self, Notify) {
+    pub fn new() -> (Box<Self>, Notify) {
         let flag = AtomicBool::new(false);
-        let notify = Notify { flag: NonNull::from(&flag) };
-        let wait = Wait { flag: Box::new(flag) };
+        let notify = Notify(NonNull::from(&flag));
+        let wait = Box::new(Wait(flag));
         (wait, notify)
     }
-    pub fn already_notified() -> Self {
-        let flag = AtomicBool::new(true);
-        Wait { flag: Box::new(flag) }
+    pub fn already_notified() -> Box<Self> {
+        Box::new(Wait(AtomicBool::new(true)))
+    }
+}
+
+impl Drop for Wait {
+    fn drop(&mut self) {
+        while self.0.load(Ordering::Acquire) {}
     }
 }
 
 impl Drop for Notify {
     fn drop(&mut self) {
-        let flag = unsafe { self.flag.as_ref() };
-        flag.store(true, Ordering::Release);
-    }
-}
-
-unsafe impl Send for Notify {}
-
-impl Drop for Wait {
-    fn drop(&mut self) {
-        while self.flag.load(Ordering::Acquire) {}
-    }
-}
-
-unsafe impl Raw for Wait {
-    type Target = AtomicBool;
-    unsafe fn into_raw(self) -> *mut Self::Target {
-        let ptr: *const AtomicBool = self.flag.as_ref();
-        std::mem::forget(self);
-        ptr.cast_mut()
-    }
-    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
-        let flag = unsafe { Box::from_raw(raw) };
-        Wait { flag }
+        let wait = unsafe { self.0.as_ref() };
+        wait.store(true, Ordering::Release);
     }
 }
