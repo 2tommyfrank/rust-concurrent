@@ -1,16 +1,47 @@
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::ffi::{c_char, CString};
+use std::sync::{atomic::{AtomicPtr, Ordering}, Arc, Weak};
 
-pub unsafe trait Raw {
+pub trait Raw: Send {
     type Target;
     fn into_raw(self) -> *mut Self::Target;
     unsafe fn from_raw(raw: *mut Self::Target) -> Self;
 }
 
-unsafe impl<T> Raw for Box<T> {
+impl<T: Send> Raw for Box<T> {
     type Target = T;
     fn into_raw(self) -> *mut T { Box::into_raw(self) }
     unsafe fn from_raw(raw: *mut T) -> Self {
         unsafe { Box::from_raw(raw) }
+    }
+}
+
+impl<T: Send + Sync> Raw for Arc<T> {
+    type Target = T;
+    fn into_raw(self) -> *mut Self::Target {
+        Arc::into_raw(self).cast_mut()
+    }
+    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
+        unsafe { Arc::from_raw(raw) }
+    }
+}
+
+impl<T: Send + Sync> Raw for Weak<T> {
+    type Target = T;
+    fn into_raw(self) -> *mut Self::Target {
+        Weak::into_raw(self).cast_mut()
+    }
+    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
+        unsafe { Weak::from_raw(raw) }
+    }
+}
+
+impl Raw for CString {
+    type Target = c_char;
+    fn into_raw(self) -> *mut Self::Target {
+        CString::into_raw(self)
+    }
+    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
+        unsafe { CString::from_raw(raw) }
     }
 }
 
@@ -29,7 +60,7 @@ impl<T: Raw> Atomic<T> {
 
 impl<T: Raw> Drop for Atomic<T> {
     fn drop(&mut self) {
-        let raw_t = self.0.get_mut();
-        unsafe { drop(T::from_raw(*raw_t)) }
+        let raw_t = *self.0.get_mut();
+        unsafe { drop(T::from_raw(raw_t)) }
     }
 }
