@@ -25,6 +25,8 @@ impl Drop for Notify {
     }
 }
 
+unsafe impl Send for Notify {}
+
 impl Drop for Wait {
     fn drop(&mut self) {
         while self.flag.load(Ordering::Acquire) {}

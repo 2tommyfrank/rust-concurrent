@@ -1,7 +1,8 @@
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use crate::atomic::Atomic;
+use crate::notify::{Notify, Wait};
 use crate::Str;
 use crate::backoff::Backoff;
 
@@ -382,62 +383,27 @@ impl Drop for ArrayGuard<'_> {
 }
 
 
-pub struct CLHLock {
-    tail: AtomicPtr<AtomicBool>,
-}
-pub struct CLHLockRef<'a> {
-    lock: &'a CLHLock,
-    curr_node: Arc<AtomicBool>,
-    prev_node: Option<Arc<AtomicBool>>,
-}
-pub struct CLHGuard<'a> {
-    lock_ref: &'a CLHLockRef<'a>,
-}
-
-impl Drop for CLHLock {
-    fn drop(&mut self) {
-        let tail: *const AtomicBool = *self.tail.get_mut();
-        unsafe { drop(Arc::from_raw(tail)); }
-    }
-}
+pub struct CLHLock { tail: Atomic<Wait> }
+pub struct CLHLockRef<'a>(&'a CLHLock);
 
 impl Lock for CLHLock {
     type Ref<'a> = CLHLockRef<'a>;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
-        Ok(CLHLockRef {
-            lock: self,
-            curr_node: Arc::new(AtomicBool::new(false)),
-            prev_node: None,
-        })
+        Ok(CLHLockRef(self))
     }
 }
 
 impl UnboundedLock for CLHLock {
     fn new() -> Self {
-        let locked = AtomicBool::new(false);
-        let tail = Arc::into_raw(Arc::new(locked)).cast_mut();
-        CLHLock { tail: AtomicPtr::new(tail) }
+        CLHLock { tail: Atomic::new(Wait::already_notified()) }
     }
 }
 
 impl<'a> LockRef<'a> for CLHLockRef<'a> {
-    type Guard = CLHGuard<'a>;
+    type Guard = Notify;
     fn acquire(&mut self) -> Self::Guard {
-        let tail = &self.lock.tail;
-        *self.curr_node.get_mut() = true;
-        let curr_node = Arc::into_raw(self.curr_node).cast_mut();
-        let prev_node = tail.swap(curr_node, Ordering::AcqRel);
-        let prev_node = unsafe { Arc::from_raw(prev_node) };
-        self.prev_node = Some(prev_node);
-        while prev_node.load(Ordering::Acquire) {}
-        CLHGuard { lock_ref: &self }
-    }
-}
-
-impl Drop for CLHGuard<'_> {
-    fn drop(&mut self) {
-        let CLHLockRef { lock: _, mut curr_node, prev_node } = self.lock_ref;
-        curr_node.store(false, Ordering::Release);
-        curr_node = prev_node.take().expect("already unlocked");
+        let (wait, notify) = Wait::new();
+        self.0.tail.swap(wait, Ordering::AcqRel);
+        notify
     }
 }
