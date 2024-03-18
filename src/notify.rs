@@ -5,9 +5,9 @@ pub struct Notify(NonNull<AtomicBool>);
 
 impl Wait {
     pub fn new() -> (Box<Self>, Notify) {
-        let flag = AtomicBool::new(false);
-        let notify = Notify(NonNull::from(&flag));
-        let wait = Box::new(Wait(flag));
+        let wait = Box::new(Wait(AtomicBool::new(false)));
+        let flag = &wait.as_ref().0;
+        let notify = Notify(NonNull::from(flag));
         (wait, notify)
     }
     pub fn already_notified() -> Box<Self> {
@@ -23,7 +23,7 @@ impl Drop for Wait {
 
 impl Drop for Notify {
     fn drop(&mut self) {
-        let wait = unsafe { self.0.as_ref() };
-        wait.store(true, Ordering::Release);
+        let flag = unsafe { self.0.as_ref() };
+        flag.store(true, Ordering::Release);
     }
 }
