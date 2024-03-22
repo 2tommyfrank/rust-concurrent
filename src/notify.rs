@@ -1,29 +1,43 @@
 use std::{ptr::NonNull, sync::atomic::{AtomicBool, Ordering}};
 
-pub struct Wait(AtomicBool);
-pub struct Notify(NonNull<AtomicBool>);
+use crate::atomic::Raw;
 
-impl Wait {
-    pub fn new() -> (Box<Self>, Notify) {
-        let wait = Box::new(Wait(AtomicBool::new(false)));
-        let flag = &wait.as_ref().0;
-        let notify = Notify(NonNull::from(flag));
-        (wait, notify)
-    }
-    pub fn already_notified() -> Box<Self> {
-        Box::new(Wait(AtomicBool::new(true)))
+pub struct Notify(NonNull<WaitFlag>);
+pub struct WaitFlag(AtomicBool);
+
+impl Drop for Notify {
+    fn drop(&mut self) {
+        let flag = unsafe { self.0.as_ref() };
+        flag.0.store(true, Ordering::Release);
     }
 }
 
-impl Drop for Wait {
+impl Drop for WaitFlag {
     fn drop(&mut self) {
         while self.0.load(Ordering::Acquire) {}
     }
 }
 
-impl Drop for Notify {
-    fn drop(&mut self) {
-        let flag = unsafe { self.0.as_ref() };
-        flag.store(true, Ordering::Release);
+pub struct Wait(Box<WaitFlag>);
+
+impl Wait {
+    pub fn new() -> (Self, Notify) {
+        let flag = Box::new(WaitFlag(AtomicBool::new(false)));
+        let notify = Notify(NonNull::from(flag.as_ref()));
+        let wait = Wait(flag);
+        (wait, notify)
+    }
+    pub fn already_notified() -> Self {
+        let flag = Box::new(WaitFlag(AtomicBool::new(true)));
+        Wait(flag)
+    }
+}
+
+impl Raw for Wait {
+    type Target = WaitFlag;
+    fn into_raw(self) -> *mut Self::Target { self.0.into_raw() }
+    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
+        let flag = unsafe { Box::from_raw(raw) };
+        Wait(flag)
     }
 }

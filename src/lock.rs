@@ -383,7 +383,7 @@ impl Drop for ArrayGuard<'_> {
 }
 
 
-pub struct CLHLock { tail: Atomic<Box<Wait>> }
+pub struct CLHLock { tail: Atomic<Wait> }
 pub struct CLHLockRef<'a>(&'a CLHLock);
 
 impl Lock for CLHLock {
