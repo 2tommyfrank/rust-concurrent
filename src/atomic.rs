@@ -1,5 +1,4 @@
-use std::ffi::{c_char, CString};
-use std::sync::{atomic::{AtomicPtr, Ordering}, Arc, Weak};
+use std::{ptr::null_mut, sync::atomic::{AtomicPtr, Ordering}};
 
 pub trait Raw: Send {
     type Target;
@@ -15,33 +14,19 @@ impl<T: Send> Raw for Box<T> {
     }
 }
 
-impl<T: Send + Sync> Raw for Arc<T> {
-    type Target = T;
+impl<T: Raw> Raw for Option<T> {
+    type Target = T::Target;
     fn into_raw(self) -> *mut Self::Target {
-        Arc::into_raw(self).cast_mut()
+        match self {
+            None => null_mut(),
+            Some(t) => t.into_raw(),
+        }
     }
     unsafe fn from_raw(raw: *mut Self::Target) -> Self {
-        unsafe { Arc::from_raw(raw) }
-    }
-}
-
-impl<T: Send + Sync> Raw for Weak<T> {
-    type Target = T;
-    fn into_raw(self) -> *mut Self::Target {
-        Weak::into_raw(self).cast_mut()
-    }
-    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
-        unsafe { Weak::from_raw(raw) }
-    }
-}
-
-impl Raw for CString {
-    type Target = c_char;
-    fn into_raw(self) -> *mut Self::Target {
-        CString::into_raw(self)
-    }
-    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
-        unsafe { CString::from_raw(raw) }
+        if raw.is_null() { None }
+        else {
+            unsafe { Some(T::from_raw(raw)) }
+        }
     }
 }
 

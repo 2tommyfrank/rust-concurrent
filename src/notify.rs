@@ -7,8 +7,10 @@ pub struct WaitFlag(AtomicBool);
 
 impl Drop for Notify {
     fn drop(&mut self) {
-        let flag = unsafe { self.0.as_ref() };
-        flag.0.store(true, Ordering::Release);
+        unsafe {
+            let flag = self.0.as_ref();
+            flag.0.store(true, Ordering::Release);
+        }
     }
 }
 
