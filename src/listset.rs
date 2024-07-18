@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-use crate::{lock::Lock, hash::{Hashed, Hashable}};
+use crate::hash::{Hashed, Hashable};
 
 pub trait Set<T> {
     fn contains(&self, element: T) -> bool;

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::*};
 use std::time::Duration;
 
 use crate::atomic::Atomic;
@@ -74,17 +74,17 @@ impl<'a> LockRef<'a> for PetersonLockRef<'a> {
         let PetersonLock { flags, victim, refs_left: _ } = self.lock;
         let my_flag = if self.id { &flags[1] } else { &flags[0] };
         let other_flag = if self.id { &flags[0] } else { &flags[1] };
-        my_flag.store(true, Ordering::Release);
-        victim.store(self.id, Ordering::Release);
-        while other_flag.load(Ordering::Acquire) &&
-            victim.load(Ordering::Acquire) == self.id {}
+        my_flag.store(true, Release);
+        victim.store(self.id, Release);
+        while other_flag.load(Acquire) &&
+            victim.load(Acquire) == self.id {}
         FlagGuard { flag: my_flag }
     }
 }
 
 impl Drop for FlagGuard<'_> {
     fn drop(&mut self) {
-        self.flag.store(false, Ordering::Release);
+        self.flag.store(false, Release);
     }
 }
 
@@ -134,13 +134,13 @@ impl<'a> LockRef<'a> for FilterLockRef<'a> {
         let FilterLock { levels, victims, refs_left: _ } = self.lock;
         let capacity = self.lock.capacity();
         for i in 1..capacity {
-            levels[self.id].store(i, Ordering::Release);
-            victims[i].store(self.id, Ordering::Release);
+            levels[self.id].store(i, Release);
+            victims[i].store(self.id, Release);
             // spin until no other threads are ahead
             while (0..capacity).any(|k| {
                 if k == self.id { return false }
-                if levels[k].load(Ordering::Acquire) < i { return false }
-                victims[i].load(Ordering::Acquire) == self.id
+                if levels[k].load(Acquire) < i { return false }
+                victims[i].load(Acquire) == self.id
             }) {}
         }
         LevelGuard { level: &levels[self.id] }
@@ -149,7 +149,7 @@ impl<'a> LockRef<'a> for FilterLockRef<'a> {
 
 impl Drop for LevelGuard<'_> {
     fn drop(&mut self) {
-        self.level.store(0, Ordering::Release);
+        self.level.store(0, Release);
     }
 }
 
@@ -197,18 +197,18 @@ impl<'a> LockRef<'a> for BakeryLockRef<'a> {
     fn acquire(&mut self) -> Self::Guard {
         let BakeryLock { flags, labels, refs_left: _ } = self.lock;
         let capacity = self.lock.capacity();
-        flags[self.id].store(true, Ordering::Release);
+        flags[self.id].store(true, Release);
         let mut max_label: usize = 0;
         for label in labels.as_ref() {
-            let label = label.load(Ordering::Acquire);
+            let label = label.load(Acquire);
             if label > max_label { max_label = label; }
         }
         let my_label: usize = max_label + 1;
-        labels[self.id].store(my_label, Ordering::Release);
+        labels[self.id].store(my_label, Release);
         while (0..capacity).any(|k| {
             if k == self.id { return false }
-            if !flags[k].load(Ordering::Acquire) { return false }
-            let other_label = labels[k].load(Ordering::Acquire);
+            if !flags[k].load(Acquire) { return false }
+            let other_label = labels[k].load(Acquire);
             if other_label < my_label { return true }
             if other_label > my_label { return false }
             k < self.id
@@ -219,13 +219,12 @@ impl<'a> LockRef<'a> for BakeryLockRef<'a> {
 
 
 pub struct TasLock { locked: AtomicBool }
-pub struct TasLockRef<'a>(&'a TasLock);
 pub struct TasGuard<'a> { locked: &'a AtomicBool }
 
 impl Lock for TasLock {
-    type Ref<'a> = TasLockRef<'a>;
+    type Ref<'a> = &'a TasLock;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
-        Ok(TasLockRef(self))
+        Ok(self)
     }
 }
 
@@ -235,36 +234,35 @@ impl UnboundedLock for TasLock {
     }
 }
 
-impl<'a> LockRef<'a> for TasLockRef<'a> {
+impl<'a> LockRef<'a> for &'a TasLock {
     type Guard = TasGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        let locked = &self.0.locked;
-        while locked.swap(true, Ordering::Acquire) {};
+        let locked = &self.locked;
+        while locked.swap(true, Acquire) {};
         TasGuard { locked }
     }
 }
 
 impl Drop for TasGuard<'_> {
     fn drop(&mut self) {
-        self.locked.store(false, Ordering::Release);
+        self.locked.store(false, Release);
     }
 }
 
 
 pub struct TtasLock { locked: AtomicBool }
-pub struct TtasLockRef<'a>(&'a TtasLock);
 
 impl TtasLock {
     fn try_lock(&self) -> bool {
-        while self.locked.load(Ordering::Acquire) {};
-        !self.locked.swap(true, Ordering::Acquire)
+        while self.locked.load(Acquire) {};
+        !self.locked.swap(true, Acquire)
     }
 }
 
 impl Lock for TtasLock {
-    type Ref<'a> = TtasLockRef<'a>;
+    type Ref<'a> = &'a TtasLock;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
-        Ok(TtasLockRef(self))
+        Ok(self)
     }
 }
 
@@ -274,12 +272,11 @@ impl UnboundedLock for TtasLock {
     }
 }
 
-impl<'a> LockRef<'a> for TtasLockRef<'a> {
+impl<'a> LockRef<'a> for &'a TtasLock {
     type Guard = TasGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        let lock = self.0;
-        while !lock.try_lock() {};
-        TasGuard { locked: &lock.locked }
+        while !self.try_lock() {};
+        TasGuard { locked: &self.locked }
     }
 }
 
@@ -289,12 +286,11 @@ pub struct BackoffLock {
     min_delay: Duration,
     max_delay: Duration,
 }
-pub struct BackoffLockRef<'a>(&'a BackoffLock);
 
 impl Lock for BackoffLock {
-    type Ref<'a> = BackoffLockRef<'a>;
+    type Ref<'a> = &'a BackoffLock;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
-        Ok(BackoffLockRef(self))
+        Ok(self)
     }
 }
 
@@ -308,13 +304,12 @@ impl UnboundedLock for BackoffLock {
     }
 }
 
-impl<'a> LockRef<'a> for BackoffLockRef<'a> {
+impl<'a> LockRef<'a> for &'a BackoffLock {
     type Guard = TasGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        let BackoffLock { ttas, min_delay, max_delay } = self.0;
-        let mut backoff = Backoff::new(*min_delay, *max_delay);
-        while !ttas.try_lock() { backoff.backoff(); }
-        TasGuard { locked: &ttas.locked }
+        let mut backoff = Backoff::new(self.min_delay, self.max_delay);
+        while !self.ttas.try_lock() { backoff.backoff(); }
+        TasGuard { locked: &self.ttas.locked }
     }
 }
 
@@ -367,29 +362,28 @@ impl<'a> LockRef<'a> for ArrayLockRef<'a> {
     fn acquire(&mut self) -> Self::Guard {
         let lock = self.0;
         // using AcqRel ensures fairness
-        let slot = lock.next_slot.fetch_add(1, Ordering::AcqRel);
+        let slot = lock.next_slot.fetch_add(1, AcqRel);
         let curr_flag = lock.get_flag(slot);
         let next_flag = lock.get_flag(slot + 1);
-        while !curr_flag.load(Ordering::Acquire) {};
+        while !curr_flag.load(Acquire) {};
         ArrayGuard { curr_flag, next_flag }
     }
 }
 
 impl Drop for ArrayGuard<'_> {
     fn drop(&mut self) {
-        self.curr_flag.store(false, Ordering::Release);
-        self.next_flag.store(true, Ordering::Release);
+        self.curr_flag.store(false, Release);
+        self.next_flag.store(true, Release);
     }
 }
 
 
-pub struct CLHLock { tail: Atomic<Wait> }
-pub struct CLHLockRef<'a>(&'a CLHLock);
+pub struct CLHLock { tail: Atomic<Box<Wait<()>>> }
 
 impl Lock for CLHLock {
-    type Ref<'a> = CLHLockRef<'a>;
+    type Ref<'a> = &'a CLHLock;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
-        Ok(CLHLockRef(self))
+        Ok(self)
     }
 }
 
@@ -399,11 +393,54 @@ impl UnboundedLock for CLHLock {
     }
 }
 
-impl<'a> LockRef<'a> for CLHLockRef<'a> {
-    type Guard = Notify;
+impl<'a> LockRef<'a> for &'a CLHLock {
+    type Guard = Notify<()>;
     fn acquire(&mut self) -> Self::Guard {
         let (wait, notify) = Wait::new();
-        self.0.tail.swap(wait, Ordering::AcqRel);
+        self.tail.swap(wait, AcqRel);
         notify
+    }
+}
+
+
+type AtomicNotify<T> = Atomic<Option<Notify<T>>>;
+pub struct MCSLock { tail: AtomicNotify<AtomicNotify<()>> }
+pub struct MCSGuard<'a> {
+    tail: &'a AtomicNotify<AtomicNotify<()>>,
+    wait: Box<Wait<AtomicNotify<()>>>,
+}
+
+impl Lock for MCSLock {
+    type Ref<'a> = &'a MCSLock;
+    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+        Ok(self)
+    }
+}
+
+impl UnboundedLock for MCSLock {
+    fn new() -> Self {
+        MCSLock { tail: Atomic::new(None) }
+    }
+}
+
+impl<'a> LockRef<'a> for &'a MCSLock {
+    type Guard = MCSGuard<'a>;
+    fn acquire(&mut self) -> Self::Guard {
+        let (wait, notify) = Wait::with(Atomic::new(None));
+        if let Some(notify) = self.tail.swap(Some(notify), AcqRel) {
+            let (inner_wait, inner_notify) = Wait::new();
+            notify.swap(Some(inner_notify), AcqRel);
+            drop(notify);
+            inner_wait.wait();
+        }
+        MCSGuard { tail: &self.tail, wait }
+    }
+}
+
+impl<'a> Drop for MCSGuard<'a> {
+    fn drop(&mut self) {
+        let notify_raw = self.wait.raw_notify().as_ptr();
+        self.tail.compare_swap(notify_raw, None, AcqRel);
+        drop(self.wait.wait().take(Acquire));
     }
 }
