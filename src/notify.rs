@@ -1,9 +1,8 @@
-use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering::*};
 
-use crate::atomic::{Raw, RawNonNull};
+use crate::atomic::Raw;
 
 pub struct Wait<T> {
     flag: AtomicBool,
@@ -18,10 +17,6 @@ impl<T> Wait<T> {
     }
     pub fn already_notified_with(t: T) -> Box<Self> {
         Box::new(Wait { flag: AtomicBool::new(true), t })
-    }
-    pub fn raw_notify(self: &Box<Self>) -> NonNull<<Notify<T> as Raw>::Target>
-    {
-        NonNull::from(self.as_ref())
     }
     pub fn wait(&self) -> &T {
         while self.flag.load(Acquire) {}
@@ -60,16 +55,9 @@ impl<T> Drop for Notify<T> {
 }
 
 impl<T> Raw for Notify<T> {
-    type Target = Wait<T>;
-    fn into_raw(self) -> *mut Self::Target {
-        let notify = ManuallyDrop::new(self);
-        notify.0.as_ptr()
-    }
-    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
-        unsafe { Notify(NonNull::new_unchecked(raw)) }
-    }
+    type Target = NonNull<Wait<T>>;
+    fn as_raw(&self) -> Self::Target { self.0 }
+    unsafe fn from_raw(raw: Self::Target) -> Self { Notify(raw) }
 }
-
-unsafe impl<T> RawNonNull for Notify<T> {}
 
 unsafe impl<T> Send for Notify<T> {}

@@ -1,70 +1,198 @@
-use std::{ptr::null_mut, sync::atomic::{AtomicPtr, Ordering::{self, *}}};
+use std::mem;
+use std::ptr::{null_mut, NonNull};
+use std::sync::atomic::{*, Ordering::*};
+use std::sync::Arc;
 
-pub trait Raw: Send {
-    type Target;
-    fn into_raw(self) -> *mut Self::Target;
-    unsafe fn from_raw(raw: *mut Self::Target) -> Self;
+pub trait Atomizable: Sized {
+    type Atomic;
+    type Raw;
+    fn as_raw(&self) -> Self::Raw;
+    fn into_atomic(self) -> Self::Atomic;
+    fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self;
+    fn store_atomic(self, atomic: &Self::Atomic, order: Ordering);
+    fn swap_atomic(self, atomic: &Self::Atomic, order: Ordering) -> Self;
+    // Atomic*::compare_exchange and compare_exchange_weak return the previous
+    // value on both success and failure. These methods, on the other hand,
+    // return self on failure in order to avoid duplication of the old value.
+    fn compare_swap(
+        self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
+    ) -> Result<Self, Self>;
+    fn compare_swap_weak(
+        self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
+    ) -> Result<Self, Self>;
+    unsafe fn get_atomic(atomic: &mut Self::Atomic) -> Self;
 }
-pub unsafe trait RawNonNull: Raw {}
 
-impl<T: Send> Raw for Box<T> {
-    type Target = T;
-    fn into_raw(self) -> *mut Self::Target { Box::into_raw(self) }
-    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
-        unsafe { Box::from_raw(raw) }
+macro_rules! impl_atomizable {
+    ($atomic:ty) => {
+        type Atomic = $atomic;
+        type Raw = Self;
+        fn as_raw(&self) -> Self::Raw { *self }
+        fn into_atomic(self) -> Self::Atomic { Self::Atomic::new(self) }
+        fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self {
+            atomic.load(order)
+        }
+        fn store_atomic(self, atomic: &Self::Atomic, order: Ordering) {
+            atomic.store(self, order)
+        }
+        fn swap_atomic(self, atomic: &Self::Atomic, order: Ordering) -> Self {
+            atomic.swap(self, order)
+        }
+        fn compare_swap(
+            self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
+        ) -> Result<Self, Self> {
+            match atomic.compare_exchange(compare, self, order, Relaxed) {
+                Ok(old) => Ok(old),
+                Err(_) => Err(self),
+            }
+        }
+        fn compare_swap_weak(
+            self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
+        ) -> Result<Self, Self> {
+            match atomic.compare_exchange_weak(compare, self, order, Relaxed) {
+                Ok(old) => Ok(old),
+                Err(_) => Err(self),
+            }
+        }
+        unsafe fn get_atomic(atomic: &mut Self::Atomic) -> Self {
+            *atomic.get_mut()
+        }
     }
 }
 
-unsafe impl<T: Send> RawNonNull for Box<T> {}
+impl Atomizable for bool { impl_atomizable!(AtomicBool); }
+impl Atomizable for i8 { impl_atomizable!(AtomicI8); }
+impl Atomizable for u8 { impl_atomizable!(AtomicU8); }
+impl Atomizable for i16 { impl_atomizable!(AtomicI16); }
+impl Atomizable for u16 { impl_atomizable!(AtomicU16); }
+impl Atomizable for i32 { impl_atomizable!(AtomicI32); }
+impl Atomizable for u32 { impl_atomizable!(AtomicU32); }
+impl Atomizable for i64 { impl_atomizable!(AtomicI64); }
+impl Atomizable for u64 { impl_atomizable!(AtomicU64); }
+impl Atomizable for isize { impl_atomizable!(AtomicIsize); }
+impl Atomizable for usize { impl_atomizable!(AtomicUsize); }
+impl<T> Atomizable for *mut T { impl_atomizable!(AtomicPtr<T>); }
 
-impl<T: RawNonNull> Raw for Option<T> {
-    type Target = T::Target;
-    fn into_raw(self) -> *mut Self::Target {
+
+pub trait Raw: Sized {
+    type Target: Atomizable;
+    fn as_raw(&self) -> Self::Target;
+    unsafe fn from_raw(raw: Self::Target) -> Self;
+
+    fn into_raw(self) -> Self::Target {
+        let raw = self.as_raw();
+        mem::forget(self);
+        raw
+    }
+}
+
+impl<T: Raw> Atomizable for T {
+    type Atomic = <T::Target as Atomizable>::Atomic;
+    type Raw = <T::Target as Atomizable>::Raw;
+    fn as_raw(&self) -> Self::Raw { Atomizable::as_raw(&Raw::as_raw(self)) }
+    fn into_atomic(self) -> Self::Atomic {
+        self.into_raw().into_atomic()
+    }
+    fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self {
+        let raw = T::Target::load_atomic(atomic, order);
+        unsafe { T::from_raw(raw) }
+    }
+    fn store_atomic(self, atomic: &Self::Atomic, order: Ordering) {
+        self.into_raw().store_atomic(atomic, order)
+    }
+    fn swap_atomic(self, atomic: &Self::Atomic, order: Ordering) -> Self {
+        let raw = self.into_raw().swap_atomic(atomic, order);
+        unsafe { T::from_raw(raw) }
+    }
+    fn compare_swap(
+        self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
+    ) -> Result<Self, Self> {
+        match self.into_raw().compare_swap(atomic, compare, order) {
+            Ok(raw) => Ok(unsafe { Raw::from_raw(raw) }),
+            Err(raw) => Err(unsafe { Raw::from_raw(raw) }),
+        }
+    }
+    fn compare_swap_weak(
+        self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
+    ) -> Result<Self, Self> {
+        match self.into_raw().compare_swap_weak(atomic, compare, order) {
+            Ok(raw) => Ok(unsafe { Raw::from_raw(raw) }),
+            Err(raw) => Err(unsafe { Raw::from_raw(raw) }),
+        }
+    }
+    unsafe fn get_atomic(atomic: &mut Self::Atomic) -> Self {
+        let raw = unsafe { T::Target::get_atomic(atomic) };
+        unsafe { T::from_raw(raw) }
+    }
+}
+
+impl<T> Raw for NonNull<T> {
+    type Target = *mut T;
+    fn as_raw(&self) -> Self::Target { self.as_ptr() }
+    unsafe fn from_raw(raw: Self::Target) -> Self {
+        unsafe { NonNull::new_unchecked(raw) }
+    }
+}
+
+impl<T> Raw for Box<T> {
+    type Target = NonNull<T>;
+    fn as_raw(&self) -> Self::Target { NonNull::from(self.as_ref()) }
+    unsafe fn from_raw(raw: Self::Target) -> Self {
+        unsafe { Box::from_raw(raw.as_ptr()) }
+    }
+}
+
+impl<T> Raw for Arc<T> {
+    type Target = NonNull<T>;
+    fn as_raw(&self) -> Self::Target { NonNull::from(self.as_ref()) }
+    unsafe fn from_raw(raw: Self::Target) -> Self {
+        unsafe { Arc::from_raw(raw.as_ptr()) }
+    }
+}
+
+impl<R, T: Raw<Target = NonNull<R>>> Raw for Option<T> {
+    type Target = *mut R;
+    fn as_raw(&self) -> Self::Target {
         match self {
             None => null_mut(),
-            Some(t) => t.into_raw(),
+            Some(t) => t.as_raw().as_ptr(),
         }
     }
-    unsafe fn from_raw(raw: *mut Self::Target) -> Self {
-        if raw.is_null() { None }
-        else {
-            unsafe { Some(T::from_raw(raw)) }
-        }
+    unsafe fn from_raw(raw: Self::Target) -> Self {
+        NonNull::new(raw).map(|raw| unsafe { T::from_raw(raw) })
     }
 }
 
 
-pub struct Atomic<T: Raw>(AtomicPtr<T::Target>);
+pub struct Atomic<T: Atomizable>(T::Atomic);
 
-impl<T: Raw> Atomic<T> {
-    pub fn new(t: T) -> Self {
-        Atomic(AtomicPtr::new(t.into_raw()))
+impl<T: Atomizable> Atomic<T> {
+    pub fn new(t: T) -> Self { Self(t.into_atomic()) }
+    pub fn into_inner(mut self) -> T {
+        let t = unsafe { T::get_atomic(&mut self.0) };
+        mem::forget(self);
+        t
     }
-    pub fn swap(&self, t: T, order: Ordering) -> T {
-        let swapped = self.0.swap(t.into_raw(), order);
-        unsafe { T::from_raw(swapped) }
+    pub fn swap(&self, t: T) -> T { t.swap_atomic(&self.0, AcqRel) }
+    pub fn compare_swap(&self, current: T::Raw, new: T) -> Result<T, T> {
+        new.compare_swap(&self.0, current, AcqRel)
     }
-    // AtomicPtr::compare_exchange returns the previous value on both success
-    // and failure. This method, on the other hand, returns `new` on failure
-    // in order to avoid duplication of the previous value.
-    pub fn compare_swap(&self, current: *mut T::Target, new: T,
-        order: Ordering) -> T
-    {
-        let new_raw = new.into_raw();
-        match self.0.compare_exchange(current, new_raw, order, Relaxed) {
-            Ok(raw) => unsafe { T::from_raw(raw) },
-            Err(_) => unsafe { T::from_raw(new_raw) },
-        }
+    pub fn compare_swap_weak(&self, current: T::Raw, new: T) -> Result<T, T> {
+        new.compare_swap_weak(&self.0, current, AcqRel)
     }
 }
 
-impl<T: Raw> Drop for Atomic<T> {
+impl<T: Atomizable + Copy> Atomic<T> {
+    pub fn load(&self) -> T { T::load_atomic(&self.0, AcqRel) }
+    pub fn store(&self, t: T) { t.store_atomic(&self.0, SeqCst) }
+}
+
+impl<T: Atomizable> Drop for Atomic<T> {
     fn drop(&mut self) {
-        let raw_t = *self.0.get_mut();
-        unsafe { drop(T::from_raw(raw_t)) }
+        unsafe { drop(T::get_atomic(&mut self.0)) }
     }
 }
 
-impl<T: RawNonNull> Atomic<Option<T>> {
-    pub fn take(&self, order: Ordering) -> Option<T> { self.swap(None, order) }
+impl<T> Atomic<Option<T>> where Option<T>: Atomizable {
+    pub fn take(&self) -> Option<T> { self.swap(None) }
 }

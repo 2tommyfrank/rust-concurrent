@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::*};
 use std::time::Duration;
 
-use crate::atomic::Atomic;
+use crate::atomic::{Atomic, Atomizable};
 use crate::notify::{Notify, Wait};
 use crate::Str;
 use crate::backoff::Backoff;
@@ -397,7 +397,7 @@ impl<'a> LockRef<'a> for &'a CLHLock {
     type Guard = Notify<()>;
     fn acquire(&mut self) -> Self::Guard {
         let (wait, notify) = Wait::new();
-        self.tail.swap(wait, AcqRel);
+        self.tail.swap(wait);
         notify
     }
 }
@@ -427,9 +427,9 @@ impl<'a> LockRef<'a> for &'a MCSLock {
     type Guard = MCSGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         let (wait, notify) = Wait::with(Atomic::new(None));
-        if let Some(notify) = self.tail.swap(Some(notify), AcqRel) {
+        if let Some(notify) = self.tail.swap(Some(notify)) {
             let (inner_wait, inner_notify) = Wait::new();
-            notify.swap(Some(inner_notify), AcqRel);
+            notify.swap(Some(inner_notify));
             drop(notify);
             inner_wait.wait();
         }
@@ -439,8 +439,8 @@ impl<'a> LockRef<'a> for &'a MCSLock {
 
 impl<'a> Drop for MCSGuard<'a> {
     fn drop(&mut self) {
-        let notify_raw = self.wait.raw_notify().as_ptr();
-        self.tail.compare_swap(notify_raw, None, AcqRel);
-        drop(self.wait.wait().take(Acquire));
+        let notify_raw = self.wait.as_raw();
+        drop(self.tail.compare_swap(notify_raw, None));
+        drop(self.wait.wait().take());
     }
 }
