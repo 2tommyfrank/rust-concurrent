@@ -12,7 +12,7 @@ pub trait Lock: Sized {
 }
 
 pub trait BoundedLock: Lock {
-    fn with_capacity(max_threads: usize) -> Result<Self, Str>;
+    fn with_capacity(max_threads: usize) -> Self;
     fn capacity(&self) -> usize;
     fn refs_left(&self) -> usize;
 }
@@ -28,23 +28,23 @@ pub trait LockRef<'a>: Send {
 }
 
 
-pub struct PetersonLock {
+pub struct Peterson {
     flags: [AtomicBool; 2],
     victim: AtomicBool,
     refs_left: u8,
 }
-pub struct PetersonLockRef<'a> {
-    lock: &'a PetersonLock,
+pub struct PetersonRef<'a> {
+    lock: &'a Peterson,
     id: bool,
 }
 pub struct FlagGuard<'a> { flag: &'a AtomicBool }
 
-impl Lock for PetersonLock {
-    type Ref<'a> = PetersonLockRef<'a>;
+impl Lock for Peterson {
+    type Ref<'a> = PetersonRef<'a>;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         if self.refs_left > 0 {
             self.refs_left -= 1;
-            Ok(PetersonLockRef {
+            Ok(PetersonRef {
                 lock: self,
                 id: self.refs_left != 0,
             })
@@ -52,26 +52,26 @@ impl Lock for PetersonLock {
     }
 }
 
-impl BoundedLock for PetersonLock {
-    fn with_capacity(max_threads: usize) -> Result<Self, Str> {
+impl BoundedLock for Peterson {
+    fn with_capacity(max_threads: usize) -> Self {
         if max_threads > 2 {
-            Err("Peterson lock cannot support more than two threads")
+            panic!("Peterson lock cannot support more than two threads")
         } else {
-            Ok(PetersonLock {
+            Peterson {
                 flags: [AtomicBool::new(false), AtomicBool::new(false)],
                 victim: AtomicBool::new(false),
                 refs_left: 2,
-            })
+            }
         }
     }
     fn capacity(&self) -> usize { 2 }
     fn refs_left(&self) -> usize { self.refs_left as usize }
 }
 
-impl<'a> LockRef<'a> for PetersonLockRef<'a> {
+impl<'a> LockRef<'a> for PetersonRef<'a> {
     type Guard = FlagGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        let PetersonLock { flags, victim, refs_left: _ } = self.lock;
+        let Peterson { flags, victim, refs_left: _ } = self.lock;
         let my_flag = if self.id { &flags[1] } else { &flags[0] };
         let other_flag = if self.id { &flags[0] } else { &flags[1] };
         my_flag.store(true, Release);
@@ -89,49 +89,49 @@ impl Drop for FlagGuard<'_> {
 }
 
 
-pub struct FilterLock {
+pub struct Filter {
     levels: Box<[AtomicUsize]>,
     victims: Box<[AtomicUsize]>,
     refs_left: usize,
 }
-pub struct FilterLockRef<'a> {
-    lock: &'a FilterLock,
+pub struct FilterRef<'a> {
+    lock: &'a Filter,
     id: usize,
 }
 pub struct LevelGuard<'a> { level: &'a AtomicUsize }
 
-impl Lock for FilterLock {
-    type Ref<'a> = FilterLockRef<'a>;
+impl Lock for Filter {
+    type Ref<'a> = FilterRef<'a>;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         if self.refs_left > 0 {
             self.refs_left -= 1;
-            Ok(FilterLockRef { lock: self, id: self.refs_left })
+            Ok(FilterRef { lock: self, id: self.refs_left })
         } else { Err("thread capacity exceeded") }
     }
 }
 
-impl BoundedLock for FilterLock {
-    fn with_capacity(max_threads: usize) -> Result<Self, Str> {
+impl BoundedLock for Filter {
+    fn with_capacity(max_threads: usize) -> Self {
         let mut levels: Vec<AtomicUsize> = Vec::with_capacity(max_threads);
         let mut victims: Vec<AtomicUsize> = Vec::with_capacity(max_threads);
         for _ in 0..max_threads {
             levels.push(AtomicUsize::new(0));
             victims.push(AtomicUsize::new(0));
         }
-        Ok(FilterLock {
+        Filter {
             levels: levels.into_boxed_slice(),
             victims: victims.into_boxed_slice(),
             refs_left: max_threads,
-        })
+        }
     }
     fn capacity(&self) -> usize { self.levels.len() }
     fn refs_left(&self) -> usize { self.refs_left }
 }
 
-impl<'a> LockRef<'a> for FilterLockRef<'a> {
+impl<'a> LockRef<'a> for FilterRef<'a> {
     type Guard = LevelGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        let FilterLock { levels, victims, refs_left: _ } = self.lock;
+        let Filter { levels, victims, refs_left: _ } = self.lock;
         let capacity = self.lock.capacity();
         for i in 1..capacity {
             levels[self.id].store(i, Release);
@@ -154,48 +154,48 @@ impl Drop for LevelGuard<'_> {
 }
 
 
-pub struct BakeryLock {
+pub struct Bakery {
     flags: Box<[AtomicBool]>,
     labels: Box<[AtomicUsize]>,
     refs_left: usize,
 }
-pub struct BakeryLockRef<'a> {
-    lock: &'a BakeryLock,
+pub struct BakeryRef<'a> {
+    lock: &'a Bakery,
     id: usize,
 }
 
-impl Lock for BakeryLock {
-    type Ref<'a> = BakeryLockRef<'a>;
+impl Lock for Bakery {
+    type Ref<'a> = BakeryRef<'a>;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         if self.refs_left > 0 {
             self.refs_left -= 1;
-            Ok(BakeryLockRef { lock: self, id: self.refs_left })
+            Ok(BakeryRef { lock: self, id: self.refs_left })
         } else { Err("thread capacity exceeded") }
     }
 }
 
-impl BoundedLock for BakeryLock {
-    fn with_capacity(max_threads: usize) -> Result<Self, Str> {
+impl BoundedLock for Bakery {
+    fn with_capacity(max_threads: usize) -> Self {
         let mut flags: Vec<AtomicBool> = Vec::with_capacity(max_threads);
         let mut labels: Vec<AtomicUsize> = Vec::with_capacity(max_threads);
         for _ in 0..max_threads {
             flags.push(AtomicBool::new(false));
             labels.push(AtomicUsize::new(0));
         }
-        Ok(BakeryLock {
+        Bakery {
             flags: flags.into_boxed_slice(),
             labels: labels.into_boxed_slice(),
             refs_left: max_threads,
-        })
+        }
     }
     fn capacity(&self) -> usize { self.flags.len() }
     fn refs_left(&self) -> usize { self.refs_left }
 }
 
-impl<'a> LockRef<'a> for BakeryLockRef<'a> {
+impl<'a> LockRef<'a> for BakeryRef<'a> {
     type Guard = FlagGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        let BakeryLock { flags, labels, refs_left: _ } = self.lock;
+        let Bakery { flags, labels, refs_left: _ } = self.lock;
         let capacity = self.lock.capacity();
         flags[self.id].store(true, Release);
         let mut max_label: usize = 0;
@@ -218,23 +218,23 @@ impl<'a> LockRef<'a> for BakeryLockRef<'a> {
 }
 
 
-pub struct TasLock { locked: AtomicBool }
+pub struct Tas { locked: AtomicBool }
 pub struct TasGuard<'a> { locked: &'a AtomicBool }
 
-impl Lock for TasLock {
-    type Ref<'a> = &'a TasLock;
+impl Lock for Tas {
+    type Ref<'a> = &'a Tas;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         Ok(self)
     }
 }
 
-impl UnboundedLock for TasLock {
+impl UnboundedLock for Tas {
     fn new() -> Self {
-        TasLock { locked: AtomicBool::new(false) }
+        Tas { locked: AtomicBool::new(false) }
     }
 }
 
-impl<'a> LockRef<'a> for &'a TasLock {
+impl<'a> LockRef<'a> for &'a Tas {
     type Guard = TasGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         let locked = &self.locked;
@@ -250,29 +250,29 @@ impl Drop for TasGuard<'_> {
 }
 
 
-pub struct TtasLock { locked: AtomicBool }
+pub struct Ttas { locked: AtomicBool }
 
-impl TtasLock {
+impl Ttas {
     fn try_lock(&self) -> bool {
         while self.locked.load(Acquire) {};
         !self.locked.swap(true, Acquire)
     }
 }
 
-impl Lock for TtasLock {
-    type Ref<'a> = &'a TtasLock;
+impl Lock for Ttas {
+    type Ref<'a> = &'a Ttas;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         Ok(self)
     }
 }
 
-impl UnboundedLock for TtasLock {
+impl UnboundedLock for Ttas {
     fn new() -> Self {
-        TtasLock { locked: AtomicBool::new(false) }
+        Ttas { locked: AtomicBool::new(false) }
     }
 }
 
-impl<'a> LockRef<'a> for &'a TtasLock {
+impl<'a> LockRef<'a> for &'a Ttas {
     type Guard = TasGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         while !self.try_lock() {};
@@ -282,7 +282,7 @@ impl<'a> LockRef<'a> for &'a TtasLock {
 
 
 pub struct BackoffLock {
-    ttas: TtasLock,
+    ttas: Ttas,
     min_delay: Duration,
     max_delay: Duration,
 }
@@ -297,7 +297,7 @@ impl Lock for BackoffLock {
 impl UnboundedLock for BackoffLock {
     fn new() -> Self {
         BackoffLock {
-            ttas: TtasLock::new(),
+            ttas: Ttas::new(),
             min_delay: Duration::from_millis(1),
             max_delay: Duration::from_millis(1000),
         }
@@ -319,7 +319,7 @@ pub struct ArrayLock {
     next_slot: AtomicUsize,
     refs_left: usize,
 }
-pub struct ArrayLockRef<'a>(&'a ArrayLock);
+pub struct ArrayRef<'a>(&'a ArrayLock);
 pub struct ArrayGuard<'a> {
     curr_flag: &'a AtomicBool,
     next_flag: &'a AtomicBool,
@@ -333,31 +333,31 @@ impl ArrayLock {
 }
 
 impl Lock for ArrayLock {
-    type Ref<'a> = ArrayLockRef<'a>;
+    type Ref<'a> = ArrayRef<'a>;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         if self.refs_left > 0 {
             self.refs_left -= 1;
-            Ok(ArrayLockRef(self))
+            Ok(ArrayRef(self))
         } else { Err("thread capacity exceeded") }
     }
 }
 
 impl BoundedLock for ArrayLock {
-    fn with_capacity(max_threads: usize) -> Result<Self, Str> {
+    fn with_capacity(max_threads: usize) -> Self {
         let mut flags: Vec<AtomicBool> = Vec::with_capacity(max_threads);
         flags.push(AtomicBool::new(true));
         for _ in 1..max_threads { flags.push(AtomicBool::new(false)); }
-        Ok(ArrayLock {
+        ArrayLock {
             flags: flags.into_boxed_slice(),
             next_slot: AtomicUsize::new(0),
             refs_left: max_threads,
-        })
+        }
     }
     fn capacity(&self) -> usize { self.flags.len() }
     fn refs_left(&self) -> usize { self.refs_left }
 }
 
-impl<'a> LockRef<'a> for ArrayLockRef<'a> {
+impl<'a> LockRef<'a> for ArrayRef<'a> {
     type Guard = ArrayGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         let lock = self.0;
@@ -378,22 +378,22 @@ impl Drop for ArrayGuard<'_> {
 }
 
 
-pub struct CLHLock { tail: Atomic<Box<Wait<()>>> }
+pub struct Clh { tail: Atomic<Box<Wait<()>>> }
 
-impl Lock for CLHLock {
-    type Ref<'a> = &'a CLHLock;
+impl Lock for Clh {
+    type Ref<'a> = &'a Clh;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         Ok(self)
     }
 }
 
-impl UnboundedLock for CLHLock {
+impl UnboundedLock for Clh {
     fn new() -> Self {
-        CLHLock { tail: Atomic::new(Wait::already_notified()) }
+        Clh { tail: Atomic::new(Wait::already_notified()) }
     }
 }
 
-impl<'a> LockRef<'a> for &'a CLHLock {
+impl<'a> LockRef<'a> for &'a Clh {
     type Guard = Notify<()>;
     fn acquire(&mut self) -> Self::Guard {
         let (wait, notify) = Wait::new();
@@ -404,27 +404,27 @@ impl<'a> LockRef<'a> for &'a CLHLock {
 
 
 type AtomicNotify<T> = Atomic<Option<Notify<T>>>;
-pub struct MCSLock { tail: AtomicNotify<AtomicNotify<()>> }
-pub struct MCSGuard<'a> {
+pub struct Mcs { tail: AtomicNotify<AtomicNotify<()>> }
+pub struct McsGuard<'a> {
     tail: &'a AtomicNotify<AtomicNotify<()>>,
     wait: Box<Wait<AtomicNotify<()>>>,
 }
 
-impl Lock for MCSLock {
-    type Ref<'a> = &'a MCSLock;
+impl Lock for Mcs {
+    type Ref<'a> = &'a Mcs;
     fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
         Ok(self)
     }
 }
 
-impl UnboundedLock for MCSLock {
+impl UnboundedLock for Mcs {
     fn new() -> Self {
-        MCSLock { tail: Atomic::new(None) }
+        Mcs { tail: Atomic::new(None) }
     }
 }
 
-impl<'a> LockRef<'a> for &'a MCSLock {
-    type Guard = MCSGuard<'a>;
+impl<'a> LockRef<'a> for &'a Mcs {
+    type Guard = McsGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         let (wait, notify) = Wait::with(Atomic::new(None));
         if let Some(notify) = self.tail.swap(Some(notify)) {
@@ -433,11 +433,11 @@ impl<'a> LockRef<'a> for &'a MCSLock {
             drop(notify);
             inner_wait.wait();
         }
-        MCSGuard { tail: &self.tail, wait }
+        McsGuard { tail: &self.tail, wait }
     }
 }
 
-impl<'a> Drop for MCSGuard<'a> {
+impl<'a> Drop for McsGuard<'a> {
     fn drop(&mut self) {
         let notify_raw = self.wait.as_raw();
         drop(self.tail.compare_swap(notify_raw, None));
