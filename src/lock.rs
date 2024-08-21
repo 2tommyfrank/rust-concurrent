@@ -254,7 +254,7 @@ pub struct Ttas { locked: AtomicBool }
 
 impl Ttas {
     fn try_lock(&self) -> bool {
-        while self.locked.load(Acquire) {};
+        while self.locked.load(Relaxed) {};
         !self.locked.swap(true, Acquire)
     }
 }
@@ -361,8 +361,7 @@ impl<'a> LockRef<'a> for ArrayRef<'a> {
     type Guard = ArrayGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         let lock = self.0;
-        // using AcqRel ensures fairness
-        let slot = lock.next_slot.fetch_add(1, AcqRel);
+        let slot = lock.next_slot.fetch_add(1, Relaxed);
         let curr_flag = lock.get_flag(slot);
         let next_flag = lock.get_flag(slot + 1);
         while !curr_flag.load(Acquire) {};
@@ -372,7 +371,7 @@ impl<'a> LockRef<'a> for ArrayRef<'a> {
 
 impl Drop for ArrayGuard<'_> {
     fn drop(&mut self) {
-        self.curr_flag.store(false, Release);
+        self.curr_flag.store(false, Relaxed);
         self.next_flag.store(true, Release);
     }
 }
@@ -403,11 +402,10 @@ impl<'a> LockRef<'a> for &'a Clh {
 }
 
 
-type AtomicNotify<T> = Atomic<Option<Notify<T>>>;
-pub struct Mcs { tail: AtomicNotify<AtomicNotify<()>> }
+pub struct Mcs { tail: Atomic<Option<Notify<Option<Notify<()>>>>> }
 pub struct McsGuard<'a> {
-    tail: &'a AtomicNotify<AtomicNotify<()>>,
-    wait: Box<Wait<AtomicNotify<()>>>,
+    tail: &'a Atomic<Option<Notify<Option<Notify<()>>>>>,
+    wait: Box<Wait<Option<Notify<()>>>>,
 }
 
 impl Lock for Mcs {
@@ -426,12 +424,12 @@ impl UnboundedLock for Mcs {
 impl<'a> LockRef<'a> for &'a Mcs {
     type Guard = McsGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        let (wait, notify) = Wait::with(Atomic::new(None));
-        if let Some(notify) = self.tail.swap(Some(notify)) {
+        let (wait, notify) = Wait::with(None);
+        if let Some(mut notify) = self.tail.swap(Some(notify)) {
             let (inner_wait, inner_notify) = Wait::new();
-            notify.swap(Some(inner_notify));
+            *notify = Some(inner_notify);
             drop(notify);
-            inner_wait.wait();
+            drop(inner_wait);
         }
         McsGuard { tail: &self.tail, wait }
     }
@@ -441,6 +439,6 @@ impl<'a> Drop for McsGuard<'a> {
     fn drop(&mut self) {
         let notify_raw = self.wait.as_raw();
         drop(self.tail.compare_swap(notify_raw, None));
-        drop(self.wait.wait().take());
+        self.wait.wait_mut().take();
     }
 }

@@ -1,4 +1,5 @@
-use std::ops::Deref;
+use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering::*};
 
@@ -12,7 +13,10 @@ pub struct Wait<T> {
 impl<T> Wait<T> {
     pub fn with(t: T) -> (Box<Self>, Notify<T>) {
         let wait = Box::new(Wait { flag: AtomicBool::new(false), t });
-        let notify = Notify(NonNull::from(wait.as_ref()));
+        let notify = Notify {
+            ptr: NonNull::from(wait.as_ref()),
+            phantom: PhantomData
+        };
         (wait, notify)
     }
     pub fn already_notified_with(t: T) -> Box<Self> {
@@ -21,6 +25,10 @@ impl<T> Wait<T> {
     pub fn wait(&self) -> &T {
         while self.flag.load(Acquire) {}
         &self.t
+    }
+    pub fn wait_mut(&mut self) -> &mut T {
+        while self.flag.load(Acquire) {}
+        &mut self.t
     }
 }
 
@@ -38,26 +46,37 @@ impl<T> Drop for Wait<T> {
 }
 
 
-pub struct Notify<T>(NonNull<Wait<T>>);
+pub struct Notify<T> {
+    ptr: NonNull<Wait<T>>,
+    phantom: PhantomData<*mut T>, // invariant over T
+}
 
 impl<T> Deref for Notify<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        unsafe { &self.0.as_ref().t }
+        unsafe { &self.ptr.as_ref().t }
+    }
+}
+
+impl<T> DerefMut for Notify<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut self.ptr.as_mut().t }
     }
 }
 
 impl<T> Drop for Notify<T> {
     fn drop(&mut self) {
-        let wait = unsafe { self.0.as_ref() };
+        let wait = unsafe { self.ptr.as_ref() };
         wait.flag.store(true, Release);
     }
 }
 
 impl<T> Raw for Notify<T> {
     type Target = NonNull<Wait<T>>;
-    fn as_raw(&self) -> Self::Target { self.0 }
-    unsafe fn from_raw(raw: Self::Target) -> Self { Notify(raw) }
+    fn as_raw(&self) -> Self::Target { self.ptr }
+    unsafe fn from_raw(raw: Self::Target) -> Self {
+        Notify { ptr: raw, phantom: PhantomData }
+    }
 }
 
 unsafe impl<T> Send for Notify<T> {}
