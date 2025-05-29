@@ -8,5 +8,6 @@ mod backoff;
 mod guard;
 mod hash;
 mod notify;
+mod raw;
 
 type Str = &'static str;
