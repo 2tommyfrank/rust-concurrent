@@ -5,6 +5,7 @@ pub mod lock;
 
 mod atomic;
 mod backoff;
+mod guard;
 mod hash;
 mod notify;
 
