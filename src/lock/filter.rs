@@ -50,13 +50,13 @@ impl<'a> LockRef<'a> for FilterRef<'a> {
         let FilterLock { levels, victims, refs_left: _ } = self.lock;
         let capacity = self.lock.capacity();
         for i in 1..capacity {
-            levels[self.id].store(i, Release);
-            victims[i].store(self.id, Release);
-            // spin until no other threads are ahead
+            // Similar to Peterson lock: spin until no other threads are ahead
+            levels[self.id].store(i, Relaxed);
+            victims[i].swap(self.id, AcqRel);
             while (0..capacity).any(|k| {
                 if k == self.id { return false }
                 if levels[k].load(Acquire) < i { return false }
-                victims[i].load(Acquire) == self.id
+                victims[i].load(Relaxed) == self.id
             }) {}
         }
         LevelGuard::new(&levels[self.id])

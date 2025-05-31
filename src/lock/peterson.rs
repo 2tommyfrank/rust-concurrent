@@ -51,10 +51,12 @@ impl<'a> LockRef<'a> for PetersonRef<'a> {
         let PetersonLock { flags, victim, refs_left: _ } = self.lock;
         let my_flag = if self.id { &flags[1] } else { &flags[0] };
         let other_flag = if self.id { &flags[0] } else { &flags[1] };
-        my_flag.store(true, Release);
-        victim.store(self.id, Release);
-        while other_flag.load(Acquire) &&
-            victim.load(Acquire) == self.id {}
+        my_flag.store(true, Relaxed);
+        // While the result of the swap is unused, an order needs to be
+        // established between this thread setting my_flag and the other
+        // thread setting other_flag. The AcqRel here accomplishes this.
+        victim.swap(self.id, AcqRel);
+        while other_flag.load(Acquire) && victim.load(Relaxed) == self.id { }
         FlagGuard::new(my_flag)
     }
 }
