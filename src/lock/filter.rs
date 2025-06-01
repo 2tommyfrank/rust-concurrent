@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering::*};
 
 use crate::guard::LevelGuard;
@@ -8,7 +9,7 @@ use super::{BoundedLock, Lock, LockRef};
 pub struct FilterLock {
     levels: Box<[AtomicUsize]>,
     victims: Box<[AtomicUsize]>,
-    refs_left: usize,
+    refs_left: Cell<usize>,
 }
 
 pub struct FilterRef<'a> {
@@ -18,10 +19,11 @@ pub struct FilterRef<'a> {
 
 impl Lock for FilterLock {
     type Ref<'a> = FilterRef<'a>;
-    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
-        if self.refs_left > 0 {
-            self.refs_left -= 1;
-            Ok(FilterRef { lock: self, id: self.refs_left })
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+        let refs_left = self.refs_left.get();
+        if refs_left > 0 {
+            self.refs_left.set(refs_left - 1);
+            Ok(FilterRef { lock: self, id: refs_left - 1 })
         } else { Err("thread capacity exceeded") }
     }
 }
@@ -37,11 +39,11 @@ impl BoundedLock for FilterLock {
         FilterLock {
             levels: levels.into_boxed_slice(),
             victims: victims.into_boxed_slice(),
-            refs_left: max_threads,
+            refs_left: Cell::new(max_threads),
         }
     }
     fn capacity(&self) -> usize { self.levels.len() }
-    fn refs_left(&self) -> usize { self.refs_left }
+    fn refs_left(&self) -> usize { self.refs_left.get() }
 }
 
 impl<'a> LockRef<'a> for FilterRef<'a> {
@@ -62,3 +64,5 @@ impl<'a> LockRef<'a> for FilterRef<'a> {
         LevelGuard::new(&levels[self.id])
     }
 }
+
+unsafe impl Send for FilterRef<'_> { }

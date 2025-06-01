@@ -8,7 +8,7 @@ pub struct ClhLock { tail: Atomic<Box<Wait<()>>> }
 
 impl Lock for ClhLock {
     type Ref<'a> = &'a ClhLock;
-    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         Ok(self)
     }
 }

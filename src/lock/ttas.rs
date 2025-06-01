@@ -18,7 +18,7 @@ impl TtasLock {
 
 impl Lock for TtasLock {
     type Ref<'a> = &'a TtasLock;
-    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         Ok(self)
     }
 }
@@ -45,7 +45,7 @@ pub struct BackoffLock {
 
 impl Lock for BackoffLock {
     type Ref<'a> = &'a BackoffLock;
-    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         Ok(self)
     }
 }

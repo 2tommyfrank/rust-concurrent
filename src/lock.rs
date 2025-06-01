@@ -11,7 +11,7 @@ use crate::Str;
 
 pub trait Lock: Sized {
     type Ref<'a>: LockRef<'a> where Self: 'a;
-    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str>;
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str>;
 }
 
 pub trait BoundedLock: Lock {

@@ -9,7 +9,7 @@ pub struct McsLock { tail: Atomic<Option<Notify<Option<Notify<()>>>>> }
 
 impl Lock for McsLock {
     type Ref<'a> = &'a McsLock;
-    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         Ok(self)
     }
 }

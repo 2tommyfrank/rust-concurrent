@@ -9,7 +9,7 @@ pub struct TasLock { locked: AtomicBool }
 
 impl Lock for TasLock {
     type Ref<'a> = &'a TasLock;
-    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
         Ok(self)
     }
 }

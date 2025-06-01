@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::*};
 
 use crate::guard::ArrayGuard;
@@ -8,7 +9,7 @@ use super::{BoundedLock, Lock, LockRef};
 pub struct ArrayLock {
     flags: Box<[AtomicBool]>,
     next_slot: AtomicUsize,
-    refs_left: usize,
+    refs_left: Cell<usize>,
 }
 
 pub struct ArrayRef<'a>(&'a ArrayLock);
@@ -22,9 +23,10 @@ impl ArrayLock {
 
 impl Lock for ArrayLock {
     type Ref<'a> = ArrayRef<'a>;
-    fn borrow(&mut self) -> Result<Self::Ref<'_>, Str> {
-        if self.refs_left > 0 {
-            self.refs_left -= 1;
+    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+        let refs_left = self.refs_left.get();
+        if refs_left > 0 {
+            self.refs_left.set(refs_left - 1);
             Ok(ArrayRef(self))
         } else { Err("thread capacity exceeded") }
     }
@@ -38,11 +40,11 @@ impl BoundedLock for ArrayLock {
         ArrayLock {
             flags: flags.into_boxed_slice(),
             next_slot: AtomicUsize::new(0),
-            refs_left: max_threads,
+            refs_left: Cell::new(max_threads),
         }
     }
     fn capacity(&self) -> usize { self.flags.len() }
-    fn refs_left(&self) -> usize { self.refs_left }
+    fn refs_left(&self) -> usize { self.refs_left.get() }
 }
 
 impl<'a> LockRef<'a> for ArrayRef<'a> {
@@ -56,3 +58,5 @@ impl<'a> LockRef<'a> for ArrayRef<'a> {
         ArrayGuard::new(curr_flag, next_flag)
     }
 }
+
+unsafe impl Send for ArrayRef<'_> { }
