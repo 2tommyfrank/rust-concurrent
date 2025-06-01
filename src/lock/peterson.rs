@@ -1,5 +1,4 @@
-use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering::*};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering::*};
 
 use crate::guard::FlagGuard;
 use crate::Str;
@@ -9,7 +8,7 @@ use super::{BoundedLock, Lock, LockRef};
 pub struct PetersonLock {
     flags: [AtomicBool; 2],
     victim: AtomicBool,
-    refs_left: Cell<u8>,
+    refs_left: AtomicIsize,
 }
 
 pub struct PetersonRef<'a> {
@@ -20,14 +19,16 @@ pub struct PetersonRef<'a> {
 impl Lock for PetersonLock {
     type Ref<'a> = PetersonRef<'a>;
     fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
-        let refs_left = self.refs_left.get();
+        let refs_left = self.refs_left.fetch_sub(1, Relaxed);
         if refs_left > 0 {
-            self.refs_left.set(refs_left - 1);
             Ok(PetersonRef {
                 lock: self,
                 id: refs_left == 1,
             })
-        } else { Err("thread capacity exceeded") }
+        } else {
+            self.refs_left.fetch_add(1, Relaxed);
+            Err("thread capacity exceeded")
+        }
     }
 }
 
@@ -39,12 +40,21 @@ impl BoundedLock for PetersonLock {
             PetersonLock {
                 flags: [AtomicBool::new(false), AtomicBool::new(false)],
                 victim: AtomicBool::new(false),
-                refs_left: Cell::new(2),
+                refs_left: AtomicIsize::new(2),
             }
         }
     }
     fn capacity(&self) -> usize { 2 }
-    fn refs_left(&self) -> usize { self.refs_left.get() as usize }
+    fn refs_left(&self) -> usize {
+        let refs_left = self.refs_left.load(Relaxed);
+        if refs_left < 0 { 0 } else { refs_left as usize }
+    }
+}
+
+impl Drop for PetersonRef<'_> {
+    fn drop(&mut self) {
+        self.lock.refs_left.fetch_add(1, Relaxed);
+    }
 }
 
 impl<'a> LockRef<'a> for PetersonRef<'a> {
@@ -62,5 +72,3 @@ impl<'a> LockRef<'a> for PetersonRef<'a> {
         FlagGuard::new(my_flag)
     }
 }
-
-unsafe impl Send for PetersonRef<'_> { }
