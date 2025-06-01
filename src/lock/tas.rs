@@ -24,7 +24,7 @@ impl<'a> LockRef<'a> for &'a TasLock {
     type Guard = TasGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         let locked = &self.locked;
-        while locked.swap(true, Acquire) {};
+        while locked.swap(true, Acquire) { };
         TasGuard::new(locked)
     }
 }

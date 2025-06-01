@@ -52,7 +52,7 @@ impl<'a> LockRef<'a> for ArrayRef<'a> {
         let slot = lock.next_slot.fetch_add(1, Relaxed);
         let curr_flag = lock.get_flag(slot);
         let next_flag = lock.get_flag(slot + 1);
-        while !curr_flag.load(Acquire) {};
+        while !curr_flag.load(Acquire) { };
         ArrayGuard::new(curr_flag, next_flag)
     }
 }

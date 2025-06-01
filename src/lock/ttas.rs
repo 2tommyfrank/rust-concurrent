@@ -11,7 +11,7 @@ pub struct TtasLock { locked: AtomicBool }
 
 impl TtasLock {
     pub fn try_lock(&self) -> bool {
-        while self.locked.load(Relaxed) {};
+        while self.locked.load(Relaxed) { };
         !self.locked.swap(true, Acquire)
     }
 }
@@ -32,7 +32,7 @@ impl UnboundedLock for TtasLock {
 impl<'a> LockRef<'a> for &'a TtasLock {
     type Guard = TasGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        while !self.try_lock() {};
+        while !self.try_lock() { };
         TasGuard::new(&self.locked)
     }
 }

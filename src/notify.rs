@@ -23,11 +23,11 @@ impl<T> Wait<T> {
         Box::new(Wait { flag: AtomicBool::new(true), t })
     }
     pub fn wait(&self) -> &T {
-        while self.flag.load(Acquire) {}
+        while self.flag.load(Acquire) { }
         &self.t
     }
     pub fn wait_mut(&mut self) -> &mut T {
-        while self.flag.load(Acquire) {}
+        while self.flag.load(Acquire) { }
         &mut self.t
     }
 }
@@ -79,4 +79,4 @@ impl<T> Raw for Notify<T> {
     }
 }
 
-unsafe impl<T> Send for Notify<T> {}
+unsafe impl<T> Send for Notify<T> { }

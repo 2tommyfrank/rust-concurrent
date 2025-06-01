@@ -57,7 +57,7 @@ impl<'a> LockRef<'a> for FilterRef<'a> {
                 if k == self.id { return false }
                 if levels[k].load(Acquire) < i { return false }
                 victims[i].load(Relaxed) == self.id
-            }) {}
+            }) { }
         }
         LevelGuard::new(&levels[self.id])
     }
