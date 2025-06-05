@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering::*;
+
 use crate::atomic::Atomic;
 use crate::guard::McsGuard;
 use crate::notify::{Notify, Wait};
@@ -24,7 +26,7 @@ impl<'a> LockRef<'a> for &'a McsLock {
     type Guard = McsGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
         let (wait, notify) = Wait::with(None);
-        if let Some(mut notify) = self.tail.swap(Some(notify)) {
+        if let Some(mut notify) = self.tail.swap(Some(notify), Relaxed) {
             let (inner_wait, inner_notify) = Wait::new();
             *notify = Some(inner_notify);
             drop(notify);

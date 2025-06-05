@@ -51,8 +51,7 @@ pub struct ArrayGuard<'a> {
 }
 
 impl<'a> ArrayGuard<'a> {
-    pub fn new(curr_flag: &'a AtomicBool, next_flag: &'a AtomicBool)
-    -> Self {
+    pub fn new(curr_flag: &'a AtomicBool, next_flag: &'a AtomicBool) -> Self {
         Self { curr_flag, next_flag }
     }
 }
@@ -79,7 +78,7 @@ impl<'a> McsGuard<'a> {
 impl<'a> Drop for McsGuard<'a> {
     fn drop(&mut self) {
         let notify_raw = self.wait.as_raw();
-        drop(self.tail.compare_swap(notify_raw, None));
+        drop(self.tail.compare_swap_strong(notify_raw, None, Relaxed));
         self.wait.wait_mut().take();
     }
 }

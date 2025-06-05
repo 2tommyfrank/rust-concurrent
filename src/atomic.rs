@@ -9,13 +9,15 @@ pub trait Atomizable: Sized {
     type Raw;
     fn as_raw(&self) -> Self::Raw;
     fn into_atomic(self) -> Self::Atomic;
-    fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self;
+    // Calling load_atomic and/or get_atomic multiple times may violate the
+    // borrow rules for Self.
+    unsafe fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self;
     fn store_atomic(self, atomic: &Self::Atomic, order: Ordering);
     fn swap_atomic(self, atomic: &Self::Atomic, order: Ordering) -> Self;
     // Atomic*::compare_exchange and compare_exchange_weak return the previous
     // value on both success and failure. These methods, on the other hand,
     // return self on failure in order to avoid duplication of the old value.
-    fn compare_swap(
+    fn compare_swap_strong(
         self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
     ) -> Result<Self, Self>;
     fn compare_swap_weak(
@@ -30,7 +32,7 @@ macro_rules! impl_atomizable {
         type Raw = Self;
         fn as_raw(&self) -> Self::Raw { *self }
         fn into_atomic(self) -> Self::Atomic { Self::Atomic::new(self) }
-        fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self {
+        unsafe fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self {
             atomic.load(order)
         }
         fn store_atomic(self, atomic: &Self::Atomic, order: Ordering) {
@@ -39,7 +41,7 @@ macro_rules! impl_atomizable {
         fn swap_atomic(self, atomic: &Self::Atomic, order: Ordering) -> Self {
             atomic.swap(self, order)
         }
-        fn compare_swap(
+        fn compare_swap_strong(
             self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
         ) -> Result<Self, Self> {
             match atomic.compare_exchange(compare, self, order, Relaxed) {
@@ -78,11 +80,9 @@ impl<T: Raw> Atomizable for T {
     type Atomic = <T::Target as Atomizable>::Atomic;
     type Raw = <T::Target as Atomizable>::Raw;
     fn as_raw(&self) -> Self::Raw { Atomizable::as_raw(&Raw::as_raw(self)) }
-    fn into_atomic(self) -> Self::Atomic {
-        self.into_raw().into_atomic()
-    }
-    fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self {
-        let raw = T::Target::load_atomic(atomic, order);
+    fn into_atomic(self) -> Self::Atomic { self.into_raw().into_atomic() }
+    unsafe fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self {
+        let raw = unsafe { T::Target::load_atomic(atomic, order) };
         unsafe { T::from_raw(raw) }
     }
     fn store_atomic(self, atomic: &Self::Atomic, order: Ordering) {
@@ -92,10 +92,10 @@ impl<T: Raw> Atomizable for T {
         let raw = self.into_raw().swap_atomic(atomic, order);
         unsafe { T::from_raw(raw) }
     }
-    fn compare_swap(
+    fn compare_swap_strong(
         self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
     ) -> Result<Self, Self> {
-        match self.into_raw().compare_swap(atomic, compare, order) {
+        match self.into_raw().compare_swap_strong(atomic, compare, order) {
             Ok(raw) => Ok(unsafe { Raw::from_raw(raw) }),
             Err(raw) => Err(unsafe { Raw::from_raw(raw) }),
         }
@@ -123,18 +123,26 @@ impl<T: Atomizable> Atomic<T> {
         mem::forget(self);
         t
     }
-    pub fn swap(&self, t: T) -> T { t.swap_atomic(&self.0, AcqRel) }
-    pub fn compare_swap(&self, current: T::Raw, new: T) -> Result<T, T> {
-        new.compare_swap(&self.0, current, AcqRel)
+    pub fn swap(&self, t: T, order: Ordering) -> T {
+        t.swap_atomic(&self.0, order)
     }
-    pub fn compare_swap_weak(&self, current: T::Raw, new: T) -> Result<T, T> {
-        new.compare_swap_weak(&self.0, current, AcqRel)
+    pub fn compare_swap_strong(&self, current: T::Raw, new: T, order: Ordering)
+    -> Result<T, T> {
+        new.compare_swap_strong(&self.0, current, order)
+    }
+    pub fn compare_swap_weak(&self, current: T::Raw, new: T, order: Ordering)
+    -> Result<T, T> {
+        new.compare_swap_weak(&self.0, current, order)
     }
 }
 
 impl<T: Atomizable + Copy> Atomic<T> {
-    pub fn load(&self) -> T { T::load_atomic(&self.0, AcqRel) }
-    pub fn store(&self, t: T) { t.store_atomic(&self.0, SeqCst) }
+    pub fn load(&self, order: Ordering) -> T {
+        unsafe { T::load_atomic(&self.0, order) }
+    }
+    pub fn store(&self, t: T, order: Ordering) {
+        t.store_atomic(&self.0, order)
+    }
 }
 
 impl<T: Atomizable> Drop for Atomic<T> {
@@ -144,5 +152,5 @@ impl<T: Atomizable> Drop for Atomic<T> {
 }
 
 impl<T> Atomic<Option<T>> where Option<T>: Atomizable {
-    pub fn take(&self) -> Option<T> { self.swap(None) }
+    pub fn take(&self, order: Ordering) -> Option<T> { self.swap(None, order) }
 }

@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering::*;
+
 use crate::atomic::Atomic;
 use crate::notify::{Notify, Wait};
 use crate::Str;
@@ -23,7 +25,7 @@ impl<'a> LockRef<'a> for &'a ClhLock {
     type Guard = Notify<()>;
     fn acquire(&mut self) -> Self::Guard {
         let (wait, notify) = Wait::new();
-        self.tail.swap(wait);
+        self.tail.swap(wait, Relaxed);
         notify
     }
 }
