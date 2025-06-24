@@ -23,12 +23,29 @@ impl<T> Wait<T> {
         Box::new(Wait { flag: AtomicBool::new(true), t })
     }
     pub fn wait(&self) -> &T {
-        while self.flag.load(Acquire) { }
+        while !self.flag.load(Acquire) { }
         &self.t
     }
     pub fn wait_mut(&mut self) -> &mut T {
-        while self.flag.load(Acquire) { }
+        while !self.flag.load(Acquire) { }
         &mut self.t
+    }
+    pub fn try_wait(&self) -> Result<&T, ()> {
+        if self.flag.load(Acquire) { Ok(&self.t) }
+        else { Err(()) }
+    }
+    pub fn try_wait_mut(&mut self) -> Result<&mut T, ()> {
+        if self.flag.load(Acquire) { Ok(&mut self.t) }
+        else { Err(()) }
+    }
+    pub fn wait_reset(self: &mut Box<Self>) -> Notify<T> {
+        while !self.flag.load(Acquire) { }
+        *self.flag.get_mut() = false;
+        let notify = Notify {
+            ptr: NonNull::from(self.as_ref()),
+            phantom: PhantomData
+        };
+        notify
     }
 }
 
