@@ -9,8 +9,8 @@ pub trait Atomizable: Sized {
     type Raw;
     fn as_raw(&self) -> Self::Raw;
     fn into_atomic(self) -> Self::Atomic;
-    // Calling load_atomic and/or get_atomic multiple times may violate the
-    // borrow rules for Self.
+    // Calling load_atomic and/or load_atomic_unique multiple times may violate
+    // the borrow rules for Self.
     unsafe fn load_atomic(atomic: &Self::Atomic, order: Ordering) -> Self;
     fn store_atomic(self, atomic: &Self::Atomic, order: Ordering);
     fn swap_atomic(self, atomic: &Self::Atomic, order: Ordering) -> Self;
@@ -23,7 +23,8 @@ pub trait Atomizable: Sized {
     fn compare_swap_weak(
         self, atomic: &Self::Atomic, compare: Self::Raw, order: Ordering
     ) -> Result<Self, Self>;
-    unsafe fn get_atomic(atomic: &mut Self::Atomic) -> Self;
+    unsafe fn load_atomic_unique(atomic: &mut Self::Atomic) -> Self;
+    fn store_atomic_unique(self, atomic: &mut Self::Atomic);
 }
 
 macro_rules! impl_atomizable {
@@ -57,8 +58,11 @@ macro_rules! impl_atomizable {
                 Err(_) => Err(self),
             }
         }
-        unsafe fn get_atomic(atomic: &mut Self::Atomic) -> Self {
+        unsafe fn load_atomic_unique(atomic: &mut Self::Atomic) -> Self {
             *atomic.get_mut()
+        }
+        fn store_atomic_unique(self, atomic: &mut Self::Atomic) {
+            *atomic.get_mut() = self;
         }
     }
 }
@@ -108,9 +112,12 @@ impl<T: Raw> Atomizable for T {
             Err(raw) => Err(unsafe { Raw::from_raw(raw) }),
         }
     }
-    unsafe fn get_atomic(atomic: &mut Self::Atomic) -> Self {
-        let raw = unsafe { T::Target::get_atomic(atomic) };
+    unsafe fn load_atomic_unique(atomic: &mut Self::Atomic) -> Self {
+        let raw = unsafe { T::Target::load_atomic_unique(atomic) };
         unsafe { T::from_raw(raw) }
+    }
+    fn store_atomic_unique(self, atomic: &mut Self::Atomic) {
+        self.into_raw().store_atomic_unique(atomic);
     }
 }
 
@@ -119,7 +126,7 @@ pub struct Atomic<T: Atomizable>(T::Atomic);
 impl<T: Atomizable> Atomic<T> {
     pub fn new(t: T) -> Self { Self(t.into_atomic()) }
     pub fn into_inner(mut self) -> T {
-        let t = unsafe { T::get_atomic(&mut self.0) };
+        let t = unsafe { T::load_atomic_unique(&mut self.0) };
         mem::forget(self);
         t
     }
@@ -143,11 +150,17 @@ impl<T: Atomizable + Copy> Atomic<T> {
     pub fn store(&self, t: T, order: Ordering) {
         t.store_atomic(&self.0, order)
     }
+    pub fn load_unique(&mut self) -> T {
+        unsafe { T::load_atomic_unique(&mut self.0) }
+    }
+    pub fn store_unique(&mut self, t: T) {
+        t.store_atomic_unique(&mut self.0);
+    }
 }
 
 impl<T: Atomizable> Drop for Atomic<T> {
     fn drop(&mut self) {
-        unsafe { drop(T::get_atomic(&mut self.0)) }
+        unsafe { drop(T::load_atomic_unique(&mut self.0)) }
     }
 }
 
