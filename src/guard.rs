@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::*};
 
+use crate::acqrel::{AcquireBox, ReleasePtr};
 use crate::atomic::{Atomic, Atomizable};
-use crate::notify::{Notify, Wait};
 
 pub struct FlagGuard<'a> { flag: &'a AtomicBool }
 
@@ -64,21 +64,21 @@ impl Drop for ArrayGuard<'_> {
 }
 
 pub struct McsGuard<'a> {
-    tail: &'a Atomic<Option<Notify<Option<Notify<()>>>>>,
-    wait: Box<Wait<Option<Notify<()>>>>,
+    tail: &'a Atomic<Option<ReleasePtr<Option<ReleasePtr<()>>>>>,
+    acquire: AcquireBox<Option<ReleasePtr<()>>>,
 }
 
 impl<'a> McsGuard<'a> {
-    pub fn new(tail: &'a Atomic<Option<Notify<Option<Notify<()>>>>>,
-    wait: Box<Wait<Option<Notify<()>>>>) -> Self {
-        Self { tail, wait }
+    pub fn new(tail: &'a Atomic<Option<ReleasePtr<Option<ReleasePtr<()>>>>>,
+    acquire: AcquireBox<Option<ReleasePtr<()>>>) -> Self {
+        Self { tail, acquire }
     }
 }
 
 impl<'a> Drop for McsGuard<'a> {
     fn drop(&mut self) {
-        let notify_raw = self.wait.as_raw();
+        let notify_raw = self.acquire.as_raw();
         drop(self.tail.compare_swap_strong(notify_raw, None, Relaxed));
-        self.wait.wait_mut().take();
+        self.acquire.as_mut().take();
     }
 }

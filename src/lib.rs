@@ -1,13 +1,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-pub mod listset;
 pub mod lock;
+pub mod listset;
 
-mod atomic;
-mod backoff;
-mod guard;
-mod hash;
-mod notify;
 mod raw;
+mod atomic;
+mod guard;
+mod backoff;
+mod acqrel;
+mod hash;
 
 type Str = &'static str;

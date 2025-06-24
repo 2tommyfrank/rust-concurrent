@@ -1,13 +1,13 @@
 use std::sync::atomic::Ordering::*;
 
+use crate::acqrel::{AcquireBox, ReleasePtr};
 use crate::atomic::Atomic;
 use crate::guard::McsGuard;
-use crate::notify::{Notify, Wait};
 use crate::Str;
 
 use super::{Lock, LockRef, UnboundedLock};
 
-pub struct McsLock { tail: Atomic<Option<Notify<Option<Notify<()>>>>> }
+pub struct McsLock { tail: Atomic<Option<ReleasePtr<Option<ReleasePtr<()>>>>> }
 
 impl Lock for McsLock {
     type Ref<'a> = &'a McsLock;
@@ -25,13 +25,13 @@ impl UnboundedLock for McsLock {
 impl<'a> LockRef<'a> for &'a McsLock {
     type Guard = McsGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        let (wait, notify) = Wait::with(None);
-        if let Some(mut notify) = self.tail.swap(Some(notify), Relaxed) {
-            let (inner_wait, inner_notify) = Wait::new();
-            *notify = Some(inner_notify);
-            drop(notify);
-            drop(inner_wait);
+        let (acquire, release) = AcquireBox::new(None);
+        if let Some(mut release) = self.tail.swap(Some(release), Relaxed) {
+            let (inner_acquire, inner_release) = AcquireBox::default();
+            *release = Some(inner_release);
+            drop(release);
+            drop(inner_acquire);
         }
-        McsGuard::new(&self.tail, wait)
+        McsGuard::new(&self.tail, acquire)
     }
 }
