@@ -6,6 +6,7 @@ mod ttas;
 mod array;
 mod clh;
 mod mcs;
+mod timeout;
 
 use crate::Str;
 
@@ -38,3 +39,4 @@ pub use ttas::{TtasLock, BackoffLock};
 pub use array::{ArrayLock, ArrayRef};
 pub use clh::ClhLock;
 pub use mcs::McsLock;
+pub use timeout::TimeoutLock;
