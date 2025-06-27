@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering::*};
 
 use crate::guard::FlagGuard;
-use crate::Str;
+use crate::lock::BorrowError::{self, *};
 
 use super::{BoundedLock, Lock, LockRef};
 
@@ -18,7 +18,7 @@ pub struct PetersonRef<'a> {
 
 impl Lock for PetersonLock {
     type Ref<'a> = PetersonRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         let refs_left = self.refs_left.fetch_sub(1, Relaxed);
         if refs_left > 0 {
             Ok(PetersonRef {
@@ -27,7 +27,7 @@ impl Lock for PetersonLock {
             })
         } else {
             self.refs_left.fetch_add(1, Relaxed);
-            Err("thread capacity exceeded")
+            Err(ThreadCapacityExceeded)
         }
     }
 }

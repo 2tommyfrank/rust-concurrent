@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use crate::acqrel::{AcquireBox, RecursiveAcquire};
 use crate::atomic::Atomic;
 use crate::guard::ReleaseGuard;
-use crate::Str;
+use crate::lock::BorrowError;
 
 use super::{Lock, LockRef, UnboundedLock};
 
@@ -30,7 +30,7 @@ impl TimeoutLock {
 
 impl Lock for TimeoutLock {
     type Ref<'a> = &'a TimeoutLock;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         Ok(self)
     }
 }

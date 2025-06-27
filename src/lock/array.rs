@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering::*};
 
 use crate::guard::ArrayGuard;
-use crate::Str;
+use crate::lock::BorrowError::{self, *};
 
 use super::{BoundedLock, Lock, LockRef};
 
@@ -22,13 +22,13 @@ impl ArrayLock {
 
 impl Lock for ArrayLock {
     type Ref<'a> = ArrayRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         let refs_left = self.refs_left.fetch_sub(1, Relaxed);
         if refs_left > 0 {
             Ok(ArrayRef(self))
         } else {
             self.refs_left.fetch_add(1, Relaxed);
-            Err("thread capacity exceeded")
+            Err(ThreadCapacityExceeded)
         }
     }
 }

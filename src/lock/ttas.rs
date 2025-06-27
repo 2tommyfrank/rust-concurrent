@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::backoff::Backoff;
 use crate::guard::TasGuard;
-use crate::Str;
+use crate::lock::BorrowError;
 
 use super::{Lock, LockRef, UnboundedLock};
 
@@ -18,7 +18,7 @@ impl TtasLock {
 
 impl Lock for TtasLock {
     type Ref<'a> = &'a TtasLock;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         Ok(self)
     }
 }
@@ -45,7 +45,7 @@ pub struct BackoffLock {
 
 impl Lock for BackoffLock {
     type Ref<'a> = &'a BackoffLock;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         Ok(self)
     }
 }

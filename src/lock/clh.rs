@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering::*;
 use crate::acqrel::AcquireBox;
 use crate::atomic::Atomic;
 use crate::guard::ReleaseGuard;
-use crate::Str;
+use crate::lock::BorrowError;
 
 use super::{Lock, LockRef, UnboundedLock};
 
@@ -11,7 +11,7 @@ pub struct ClhLock { tail: Atomic<AcquireBox<()>> }
 
 impl Lock for ClhLock {
     type Ref<'a> = &'a ClhLock;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         Ok(self)
     }
 }

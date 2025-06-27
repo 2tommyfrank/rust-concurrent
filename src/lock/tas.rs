@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering::*};
 
 use crate::guard::TasGuard;
-use crate::Str;
+use crate::lock::BorrowError;
 
 use super::{Lock, LockRef, UnboundedLock};
 
@@ -9,7 +9,7 @@ pub struct TasLock { locked: AtomicBool }
 
 impl Lock for TasLock {
     type Ref<'a> = &'a TasLock;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         Ok(self)
     }
 }

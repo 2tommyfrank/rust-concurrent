@@ -9,5 +9,3 @@ mod guard;
 mod backoff;
 mod acqrel;
 mod hash;
-
-type Str = &'static str;

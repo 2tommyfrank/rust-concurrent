@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering::*;
 use crate::acqrel::{AcquireBox, ReleasePtr};
 use crate::atomic::Atomic;
 use crate::guard::McsGuard;
-use crate::Str;
+use crate::lock::BorrowError;
 
 use super::{Lock, LockRef, UnboundedLock};
 
@@ -11,7 +11,7 @@ pub struct McsLock { tail: Atomic<Option<ReleasePtr<Option<ReleasePtr<()>>>>> }
 
 impl Lock for McsLock {
     type Ref<'a> = &'a McsLock;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         Ok(self)
     }
 }

@@ -8,11 +8,11 @@ mod clh;
 mod mcs;
 mod timeout;
 
-use crate::Str;
+pub enum BorrowError { ThreadCapacityExceeded }
 
 pub trait Lock: Sized {
     type Ref<'a>: LockRef<'a> where Self: 'a;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str>;
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError>;
 }
 
 pub trait BoundedLock: Lock {

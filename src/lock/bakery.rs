@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering::*};
 
 use crate::guard::FlagGuard;
-use crate::Str;
+use crate::lock::BorrowError::{self, *};
 
 use super::{BoundedLock, Lock, LockRef};
 
@@ -18,13 +18,13 @@ pub struct BakeryRef<'a> {
 
 impl Lock for BakeryLock {
     type Ref<'a> = BakeryRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         let refs_left = self.refs_left.fetch_sub(1, Relaxed);
         if refs_left > 0 {
             Ok(BakeryRef { lock: self, id: refs_left as usize })
         } else {
             self.refs_left.fetch_add(1, Relaxed);
-            Err("thread capacity exceeded")
+            Err(ThreadCapacityExceeded)
         }
     }
 }

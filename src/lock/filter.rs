@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering::*};
 
 use crate::guard::LevelGuard;
-use crate::Str;
+use crate::lock::BorrowError::{self, *};
 
 use super::{BoundedLock, Lock, LockRef};
 
@@ -18,13 +18,13 @@ pub struct FilterRef<'a> {
 
 impl Lock for FilterLock {
     type Ref<'a> = FilterRef<'a>;
-    fn borrow(&self) -> Result<Self::Ref<'_>, Str> {
+    fn borrow(&self) -> Result<Self::Ref<'_>, BorrowError> {
         let refs_left = self.refs_left.fetch_sub(1, Relaxed);
         if refs_left > 0 {
             Ok(FilterRef { lock: self, id: refs_left as usize })
         } else {
             self.refs_left.fetch_add(1, Relaxed);
-            Err("thread capacity exceeded")
+            Err(ThreadCapacityExceeded)
         }
     }
 }
