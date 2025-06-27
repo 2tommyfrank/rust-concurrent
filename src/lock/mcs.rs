@@ -25,8 +25,8 @@ impl UnboundedLock for McsLock {
 impl<'a> LockRef<'a> for &'a McsLock {
     type Guard = McsGuard<'a>;
     fn acquire(&mut self) -> Self::Guard {
-        let (acquire, release) = AcquireBox::new(None);
-        if let Some(mut release) = self.tail.swap(Some(release), Relaxed) {
+        let (acquire, next) = AcquireBox::new(None);
+        if let Some(mut release) = self.tail.swap(Some(next), Relaxed) {
             let (inner_acquire, inner_release) = AcquireBox::default();
             *release = Some(inner_release);
             drop(release);

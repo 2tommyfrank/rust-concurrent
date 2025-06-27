@@ -63,6 +63,18 @@ impl Drop for ArrayGuard<'_> {
     }
 }
 
+pub struct ReleaseGuard<T> { _release: ReleasePtr<T> }
+
+impl<T> ReleaseGuard<T> {
+    pub fn new(release: ReleasePtr<T>) -> Self {
+        Self { _release: release }
+    }
+}
+
+impl<T> Drop for ReleaseGuard<T> {
+    fn drop(&mut self) { /* ReleasePtr::drop automatically called */ }
+}
+
 pub struct McsGuard<'a> {
     tail: &'a Atomic<Option<ReleasePtr<Option<ReleasePtr<()>>>>>,
     acquire: AcquireBox<Option<ReleasePtr<()>>>,

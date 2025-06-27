@@ -1,7 +1,8 @@
 use std::sync::atomic::Ordering::*;
 
-use crate::acqrel::{AcquireBox, ReleasePtr};
+use crate::acqrel::AcquireBox;
 use crate::atomic::Atomic;
+use crate::guard::ReleaseGuard;
 use crate::Str;
 
 use super::{Lock, LockRef, UnboundedLock};
@@ -22,10 +23,11 @@ impl UnboundedLock for ClhLock {
 }
 
 impl<'a> LockRef<'a> for &'a ClhLock {
-    type Guard = ReleasePtr<()>;
+    type Guard = ReleaseGuard<()>;
     fn acquire(&mut self) -> Self::Guard {
-        let (acquire, release) = AcquireBox::default();
-        self.tail.swap(acquire, Relaxed);
-        release
+        let (next, release) = AcquireBox::default();
+        let acquire = self.tail.swap(next, Relaxed);
+        drop(acquire);
+        ReleaseGuard::new(release)
     }
 }

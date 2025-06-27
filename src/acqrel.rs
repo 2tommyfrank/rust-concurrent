@@ -122,3 +122,28 @@ impl<T> Raw for ReleasePtr<T> {
 }
 
 unsafe impl<T> Send for ReleasePtr<T> { }
+
+pub struct RecursiveAcquire(AcquireBox<Option<RecursiveAcquire>>);
+
+impl RecursiveAcquire {
+    pub fn new(acquire: AcquireBox<Option<RecursiveAcquire>>) -> Self {
+        Self(acquire)
+    }
+    pub fn try_recur(mut self) -> Option<Self> {
+        match self.0.try_as_mut() {
+            Ok(next) => next.take().and_then(Self::try_recur),
+            Err(()) => Some(self),
+        }
+    }
+}
+
+impl Raw for RecursiveAcquire {
+    type Target = NonNull<Transferable<Option<RecursiveAcquire>>>;
+    fn as_raw(&self) -> Self::Target {
+        self.0.as_raw()
+    }
+    unsafe fn from_raw(raw: Self::Target) -> Self {
+        let box_wait = unsafe { Raw::from_raw(raw) };
+        Self(box_wait)
+    }
+}

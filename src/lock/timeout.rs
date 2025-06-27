@@ -1,52 +1,30 @@
-use std::ptr::NonNull;
 use std::sync::atomic::Ordering::*;
 use std::time::{Duration, Instant};
 
-use crate::acqrel::{Transferable, AcquireBox, ReleasePtr};
+use crate::acqrel::{AcquireBox, RecursiveAcquire};
 use crate::atomic::Atomic;
-use crate::raw::Raw;
+use crate::guard::ReleaseGuard;
 use crate::Str;
 
 use super::{Lock, LockRef, UnboundedLock};
 
-pub struct RecursiveAcquire(AcquireBox<Option<RecursiveAcquire>>);
-
-impl RecursiveAcquire {
-    pub fn try_recur(mut self) -> Option<Self> {
-        match self.0.try_as_mut() {
-            Ok(next) => next.take().and_then(Self::try_recur),
-            Err(()) => Some(self),
-        }
-    }
-}
-
-impl Raw for RecursiveAcquire {
-    type Target = NonNull<Transferable<Option<RecursiveAcquire>>>;
-    fn as_raw(&self) -> Self::Target {
-        self.0.as_raw()
-    }
-    unsafe fn from_raw(raw: Self::Target) -> Self {
-        let box_wait = unsafe { Raw::from_raw(raw) };
-        Self(box_wait)
-    }
-}
-
 pub struct TimeoutLock { tail: Atomic<RecursiveAcquire> }
-type TimeoutGuard = ReleasePtr<Option<RecursiveAcquire>>;
+type TimeoutGuard = ReleaseGuard<Option<RecursiveAcquire>>;
 
 impl TimeoutLock {
     pub fn try_acquire(&self, timeout: Duration) -> Option<TimeoutGuard> {
         let start = Instant::now();
-        let (acquire, mut release) = AcquireBox::default();
-        let mut acquire = self.tail.swap(RecursiveAcquire(acquire), Relaxed);
+        let (next, mut release) = AcquireBox::default();
+        let mut acquire = self.tail.swap(RecursiveAcquire::new(next), Relaxed);
         while let Some(inner_acquire) = acquire.try_recur() {
             if start.elapsed() >= timeout {
                 *release = Some(inner_acquire);
+                drop(release);
                 return None;
             }
             acquire = inner_acquire;
         }
-        Some(release)
+        Some(TimeoutGuard::new(release))
     }
 }
 
@@ -59,7 +37,7 @@ impl Lock for TimeoutLock {
 
 impl UnboundedLock for TimeoutLock {
     fn new() -> Self {
-        let acquire = RecursiveAcquire(AcquireBox::default_acquired());
+        let acquire = RecursiveAcquire::new(AcquireBox::default_acquired());
         TimeoutLock { tail: Atomic::new(acquire) }
     }
 }
@@ -67,8 +45,9 @@ impl UnboundedLock for TimeoutLock {
 impl<'a> LockRef<'a> for &'a TimeoutLock {
     type Guard = TimeoutGuard;
     fn acquire(&mut self) -> Self::Guard {
-        let (acquire, release) = AcquireBox::default();
-        self.tail.swap(RecursiveAcquire(acquire), Relaxed);
-        release
+        let (next, release) = AcquireBox::default();
+        let acquire = self.tail.swap(RecursiveAcquire::new(next), Relaxed);
+        drop(acquire);
+        TimeoutGuard::new(release)
     }
 }
